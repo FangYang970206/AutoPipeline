@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerCommandHandlers } from './commandHandlers.js';
+import { registerExecutionHandlers } from './executionHandlers.js';
 import { registerPipelineHandlers } from './pipelineHandlers.js';
 import { registerServerHandlers } from './serverHandlers.js';
 
@@ -34,6 +35,7 @@ function createWindow() {
 ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('app:ping', () => 'pong');
 registerCommandHandlers();
+registerExecutionHandlers();
 registerPipelineHandlers();
 registerServerHandlers();
 

@@ -58,6 +58,10 @@ describe('preload contract', () => {
         delete: async () => undefined,
         reorder: async () => undefined,
       },
+      runs: {
+        start: async () => ({ id: 1, pipelineId: 1, status: 'succeeded' }),
+        onEvent: () => () => undefined,
+      },
     } satisfies AutoPipelineApi;
 
     await expect(api.app.ping()).resolves.toBe('pong');
