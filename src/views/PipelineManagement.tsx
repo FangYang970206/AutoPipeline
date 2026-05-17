@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from '../components/ui/button';
 import type { PipelineRecord, PipelineTreeFolder } from '../types';
+import { DagEditor } from './DagEditor';
 
 export function PipelineManagement() {
   const api = window.autoPipeline?.pipelines;
@@ -8,6 +9,7 @@ export function PipelineManagement() {
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
   const [folderName, setFolderName] = useState('');
   const [pipelineName, setPipelineName] = useState('');
+  const [selectedPipeline, setSelectedPipeline] = useState<PipelineRecord | null>(null);
   const [query, setQuery] = useState('');
   const [message, setMessage] = useState('');
 
@@ -81,6 +83,9 @@ export function PipelineManagement() {
       return;
     }
     await api.deletePipeline(pipeline.id);
+    if (selectedPipeline?.id === pipeline.id) {
+      setSelectedPipeline(null);
+    }
     await reload();
   }
 
@@ -121,8 +126,8 @@ export function PipelineManagement() {
         </div>
       </aside>
       <section className="min-w-0">
-        <h2 className="mb-3 text-xl font-semibold">Pipeline</h2>
-        <div className="space-y-3">
+        {selectedPipeline ? <DagEditor pipeline={selectedPipeline} /> : <h2 className="mb-3 text-xl font-semibold">Pipeline</h2>}
+        <div className={selectedPipeline ? 'mt-4 space-y-3' : 'space-y-3'}>
           {tree.map((folder) => (
             <FolderNode
               folder={folder}
@@ -131,6 +136,7 @@ export function PipelineManagement() {
               onDeletePipeline={deletePipeline}
               onRenameFolder={renameFolder}
               onRenamePipeline={renamePipeline}
+              onSelectPipeline={setSelectedPipeline}
               onSelectFolder={setSelectedFolderId}
               selectedFolderId={selectedFolderId}
             />
@@ -148,6 +154,7 @@ function FolderNode({
   onDeletePipeline,
   onRenameFolder,
   onRenamePipeline,
+  onSelectPipeline,
   onSelectFolder,
   selectedFolderId,
 }: {
@@ -156,6 +163,7 @@ function FolderNode({
   onDeletePipeline: (pipeline: PipelineRecord) => Promise<void>;
   onRenameFolder: (folder: PipelineTreeFolder) => Promise<void>;
   onRenamePipeline: (pipeline: PipelineRecord) => Promise<void>;
+  onSelectPipeline: (pipeline: PipelineRecord) => void;
   onSelectFolder: (id: number) => void;
   selectedFolderId: number | null;
 }) {
@@ -178,7 +186,9 @@ function FolderNode({
       <div className="space-y-1 p-2">
         {folder.pipelines.map((pipeline) => (
           <div className="flex items-center justify-between rounded-md px-2 py-1 hover:bg-slate-800" key={pipeline.id}>
-            <span>{pipeline.name}</span>
+            <button onClick={() => onSelectPipeline(pipeline)} type="button">
+              {pipeline.name}
+            </button>
             <div className="flex gap-2">
               <Button onClick={() => void onRenamePipeline(pipeline)} type="button" variant="ghost">
                 重命名
@@ -197,6 +207,7 @@ function FolderNode({
             onDeletePipeline={onDeletePipeline}
             onRenameFolder={onRenameFolder}
             onRenamePipeline={onRenamePipeline}
+            onSelectPipeline={onSelectPipeline}
             onSelectFolder={onSelectFolder}
             selectedFolderId={selectedFolderId}
           />
