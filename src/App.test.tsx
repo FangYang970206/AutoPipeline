@@ -58,6 +58,7 @@ describe('App shell', () => {
         delete: vi.fn(),
         testConnection: vi.fn().mockResolvedValue({ ok: true }),
       },
+      pipelines: createPipelineApiMock(),
     };
 
     render(<App />);
@@ -81,4 +82,92 @@ describe('App shell', () => {
     );
     expect(await screen.findByText('Production')).toBeInTheDocument();
   });
+
+  it('creates and filters pipelines in the Pipeline view', async () => {
+    const createFolder = vi.fn().mockResolvedValue({
+      id: 1,
+      name: 'Production',
+      parentId: null,
+      createdAt: '2026-05-18T00:00:00Z',
+      updatedAt: '2026-05-18T00:00:00Z',
+    });
+    const createPipeline = vi.fn().mockResolvedValue({
+      id: 2,
+      name: 'Deploy API',
+      folderId: 1,
+      dagEdges: [],
+      createdAt: '2026-05-18T00:00:00Z',
+      updatedAt: '2026-05-18T00:00:00Z',
+    });
+    window.autoPipeline = {
+      app: {
+        getVersion: async () => '0.1.0',
+        ping: async () => 'pong',
+      },
+      servers: createServerApiMock(),
+      pipelines: {
+        ...createPipelineApiMock(),
+        tree: vi.fn().mockResolvedValue([]),
+        createFolder,
+        createPipeline,
+        search: vi.fn().mockResolvedValue([
+          {
+            id: 1,
+            name: 'Production',
+            parentId: null,
+            createdAt: '2026-05-18T00:00:00Z',
+            updatedAt: '2026-05-18T00:00:00Z',
+            folders: [],
+            pipelines: [
+              {
+                id: 2,
+                name: 'Deploy API',
+                folderId: 1,
+                dagEdges: [],
+                createdAt: '2026-05-18T00:00:00Z',
+                updatedAt: '2026-05-18T00:00:00Z',
+              },
+            ],
+          },
+        ]),
+      },
+    };
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText('文件夹名称'), { target: { value: 'Production' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建文件夹' }));
+    await waitFor(() => expect(createFolder).toHaveBeenCalledWith({ name: 'Production', parentId: null }));
+
+    fireEvent.change(screen.getByLabelText('Pipeline 名称'), { target: { value: 'Deploy API' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建 Pipeline' }));
+    await waitFor(() => expect(createPipeline).toHaveBeenCalledWith({ name: 'Deploy API', folderId: 1 }));
+
+    fireEvent.change(screen.getByLabelText('搜索 Pipeline'), { target: { value: 'deploy' } });
+    expect(await screen.findByText('Deploy API')).toBeInTheDocument();
+  });
 });
+
+function createServerApiMock() {
+  return {
+    list: vi.fn().mockResolvedValue([]),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    testConnection: vi.fn().mockResolvedValue({ ok: true }),
+  };
+}
+
+function createPipelineApiMock() {
+  return {
+    tree: vi.fn().mockResolvedValue([]),
+    search: vi.fn().mockResolvedValue([]),
+    createFolder: vi.fn(),
+    renameFolder: vi.fn(),
+    deleteFolder: vi.fn(),
+    createPipeline: vi.fn(),
+    renamePipeline: vi.fn(),
+    getPipelineDeleteImpact: vi.fn().mockResolvedValue({ runCount: 0 }),
+    deletePipeline: vi.fn(),
+  };
+}

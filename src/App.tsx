@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from './components/ui/button';
 import { useAppStore } from './store/appStore';
 import type { ViewId } from './types';
+import { PipelineManagement } from './views/PipelineManagement';
 import { ServerManagement } from './views/ServerManagement';
 
 const navItems: Array<{
@@ -65,7 +66,9 @@ export function App() {
         </header>
 
         <section className="flex flex-1 flex-col gap-4 overflow-auto p-6">
-          {activeView === 'servers' ? (
+          {activeView === 'pipelines' ? (
+            <PipelineManagement />
+          ) : activeView === 'servers' ? (
             <ServerManagement />
           ) : (
             <>
