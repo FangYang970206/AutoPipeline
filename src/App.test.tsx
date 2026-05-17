@@ -3,6 +3,34 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import i18n from './i18n';
 import { useAppStore } from './store/appStore';
+import type { ExecutionEvent } from './types';
+
+vi.mock('@xyflow/react', async () => {
+  const React = await import('react');
+  return {
+    addEdge: (connection: unknown, edges: unknown[]) => [...edges, connection],
+    Background: () => null,
+    Controls: () => null,
+    ReactFlow: ({ children, nodes, onNodeClick }: { children: React.ReactNode; nodes: Array<{ id: string; data: { label: string } }>; onNodeClick?: (event: unknown, node: unknown) => void }) => (
+      <div>
+        {nodes.map((node) => (
+          <button key={node.id} onClick={() => onNodeClick?.({}, node)} type="button">
+            {node.data.label}
+          </button>
+        ))}
+        {children}
+      </div>
+    ),
+    useEdgesState: (initial: unknown[]) => {
+      const [edges, setEdges] = React.useState(initial);
+      return [edges, setEdges, vi.fn()];
+    },
+    useNodesState: (initial: unknown[]) => {
+      const [nodes, setNodes] = React.useState(initial);
+      return [nodes, setNodes, vi.fn()];
+    },
+  };
+});
 
 describe('App shell', () => {
   beforeEach(() => {
@@ -60,6 +88,7 @@ describe('App shell', () => {
       },
       pipelines: createPipelineApiMock(),
       commands: createCommandApiMock(),
+      runs: createRunsApiMock(),
     };
 
     render(<App />);
@@ -133,6 +162,7 @@ describe('App shell', () => {
         ]),
       },
       commands: createCommandApiMock(),
+      runs: createRunsApiMock(),
     };
 
     render(<App />);
@@ -147,6 +177,69 @@ describe('App shell', () => {
 
     fireEvent.change(screen.getByLabelText('搜索 Pipeline'), { target: { value: 'deploy' } });
     expect(await screen.findByText('Deploy API')).toBeInTheDocument();
+  });
+
+  it('starts a pipeline run and renders streamed command output', async () => {
+    const listeners: Array<(event: ExecutionEvent) => void> = [];
+    window.autoPipeline = {
+      app: {
+        getVersion: async () => '0.1.0',
+        ping: async () => 'pong',
+      },
+      servers: createServerApiMock(),
+      pipelines: {
+        ...createPipelineApiMock(),
+        tree: vi.fn().mockResolvedValue([
+          {
+            id: 1,
+            name: 'Production',
+            parentId: null,
+            createdAt: '2026-05-18T00:00:00Z',
+            updatedAt: '2026-05-18T00:00:00Z',
+            folders: [],
+            pipelines: [
+              {
+                id: 2,
+                name: 'Deploy API',
+                folderId: 1,
+                dagEdges: [],
+                createdAt: '2026-05-18T00:00:00Z',
+                updatedAt: '2026-05-18T00:00:00Z',
+              },
+            ],
+          },
+        ]),
+        getGraph: vi.fn().mockResolvedValue({
+          units: [{ id: 'unit-a', name: 'Build', position: { x: 0, y: 0 } }],
+          edges: [],
+        }),
+      },
+      commands: createCommandApiMock(),
+      runs: {
+        start: vi.fn().mockImplementation(async () => {
+          for (const listener of listeners) {
+            listener({ type: 'run-status', runId: 7, status: 'running' });
+            listener({ type: 'command-status', runId: 7, commandId: 'cmd-build', status: 'running' });
+            listener({ type: 'stdout', runId: 7, commandId: 'cmd-build', data: 'building\n' });
+            listener({ type: 'command-status', runId: 7, commandId: 'cmd-build', status: 'succeeded' });
+            listener({ type: 'run-status', runId: 7, status: 'succeeded' });
+          }
+          return { id: 7, pipelineId: 2, status: 'succeeded' };
+        }),
+        onEvent: vi.fn().mockImplementation((callback) => {
+          listeners.push(callback);
+          return () => undefined;
+        }),
+      },
+    };
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Deploy API' }));
+    fireEvent.click(await screen.findByRole('button', { name: '运行 Pipeline' }));
+
+    expect(await screen.findByText('building')).toBeInTheDocument();
+    expect(screen.getByText('Pipeline 运行成功')).toBeInTheDocument();
   });
 });
 
@@ -182,5 +275,12 @@ function createPipelineApiMock() {
     deletePipeline: vi.fn(),
     getGraph: vi.fn().mockResolvedValue({ units: [], edges: [] }),
     saveGraph: vi.fn(),
+  };
+}
+
+function createRunsApiMock() {
+  return {
+    start: vi.fn().mockResolvedValue({ id: 1, pipelineId: 1, status: 'succeeded' }),
+    onEvent: vi.fn().mockReturnValue(() => undefined),
   };
 }

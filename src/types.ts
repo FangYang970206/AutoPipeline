@@ -31,6 +31,10 @@ export interface AutoPipelineApi {
     delete: (id: string) => Promise<void>;
     reorder: (unitId: string, orderedIds: string[]) => Promise<void>;
   };
+  runs: {
+    start: (pipelineId: number) => Promise<RunRecord>;
+    onEvent: (callback: (event: ExecutionEvent) => void) => () => void;
+  };
 }
 
 export type ServerAuthMethod = 'password' | 'key';
@@ -142,6 +146,20 @@ export interface TransferCommandRecord {
 
 export type CommandRecord = ShellCommandRecord | TransferCommandRecord;
 export type CommandInput = Omit<CommandRecord, 'unitId'>;
+
+export type RunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type CommandExecutionStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
+
+export interface RunRecord {
+  id: number;
+  pipelineId: number;
+  status: RunStatus;
+}
+
+export type ExecutionEvent =
+  | { type: 'run-status'; runId: number; status: RunStatus }
+  | { type: 'command-status'; runId: number; commandId: string; status: CommandExecutionStatus }
+  | { type: 'stdout' | 'stderr'; runId: number; commandId: string; data: string };
 
 declare global {
   interface Window {

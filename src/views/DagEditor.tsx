@@ -13,19 +13,24 @@ import {
 } from '@xyflow/react';
 import { Button } from '../components/ui/button';
 import { validateDag } from '../main/dag/dagValidation';
-import type { PipelineGraph, PipelineRecord } from '../types';
+import type { CommandExecutionStatus, ExecutionEvent, PipelineGraph, PipelineRecord, RunStatus } from '../types';
 import { CommandPanel } from './CommandPanel';
 
 type UnitNode = Node<{ label: string }>;
 type UnitEdge = Edge;
+type CommandOutput = { status: CommandExecutionStatus; stdout: string; stderr: string };
 
 export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
   const api = window.autoPipeline?.pipelines;
+  const runsApi = window.autoPipeline?.runs;
   const [nodes, setNodes, onNodesChange] = useNodesState<UnitNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<UnitEdge>([]);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedUnit, setSelectedUnit] = useState<{ id: string; name: string } | null>(null);
   const [message, setMessage] = useState('');
+  const [activeRunId, setActiveRunId] = useState<number | null>(null);
+  const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
+  const [commandOutputs, setCommandOutputs] = useState<Record<string, CommandOutput>>({});
 
   useEffect(() => {
     if (!api) {
@@ -36,6 +41,13 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
       setEdges(graph.edges.map((edge, index) => ({ id: `${edge.source}-${edge.target}-${index}`, source: edge.source, target: edge.target })));
     });
   }, [api, pipeline.id, setEdges, setNodes]);
+
+  useEffect(() => {
+    if (!runsApi) {
+      return undefined;
+    }
+    return runsApi.onEvent((event) => handleExecutionEvent(event));
+  }, [runsApi]);
 
   const onConnect = useCallback<OnConnect>((connection) => setEdges((current) => addEdge(connection, current)), [setEdges]);
 
@@ -101,8 +113,50 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
     setMessage('DAG 已保存');
   }
 
+  async function runPipeline() {
+    if (!runsApi) {
+      setMessage('IPC bridge unavailable');
+      return;
+    }
+    setActiveRunId(null);
+    setRunStatus('pending');
+    setCommandOutputs({});
+    setMessage('Pipeline 运行中');
+    try {
+      const run = await runsApi.start(pipeline.id);
+      setActiveRunId(run.id);
+      setRunStatus(run.status);
+      setMessage(run.status === 'succeeded' ? 'Pipeline 运行成功' : 'Pipeline 运行失败');
+    } catch (error) {
+      setRunStatus('failed');
+      setMessage(error instanceof Error ? error.message : 'Pipeline 运行失败');
+    }
+  }
+
+  function handleExecutionEvent(event: ExecutionEvent) {
+    if (event.type === 'run-status') {
+      setActiveRunId(event.runId);
+      setRunStatus(event.status);
+      return;
+    }
+
+    setCommandOutputs((current) => {
+      const previous = current[event.commandId] ?? { status: 'pending', stdout: '', stderr: '' };
+      if (event.type === 'command-status') {
+        return { ...current, [event.commandId]: { ...previous, status: event.status } };
+      }
+      return {
+        ...current,
+        [event.commandId]: {
+          ...previous,
+          [event.type]: previous[event.type] + event.data,
+        },
+      };
+    });
+  }
+
   return (
-    <section className="flex min-h-[560px] min-w-0 overflow-hidden rounded-md border border-border bg-slate-950">
+    <section className="flex min-h-[620px] min-w-0 overflow-hidden rounded-md border border-border bg-slate-950">
       <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div>
@@ -118,6 +172,9 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
           </Button>
           <Button onClick={autoLayout} type="button" variant="ghost">
             自动布局
+          </Button>
+          <Button disabled={runStatus === 'running'} onClick={() => void runPipeline()} type="button" variant="ghost">
+            运行 Pipeline
           </Button>
           <Button onClick={() => void save()} type="button">
             保存 DAG
@@ -142,8 +199,48 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
       <p aria-live="polite" className="min-h-8 border-t border-border px-3 py-2 text-sm text-slate-300">
         {message}
       </p>
+      <RunViewer commandOutputs={commandOutputs} runId={activeRunId} status={runStatus} />
       </div>
       {selectedUnit ? <CommandPanel unitId={selectedUnit.id} unitName={selectedUnit.name} /> : null}
     </section>
+  );
+}
+
+function RunViewer({
+  commandOutputs,
+  runId,
+  status,
+}: {
+  commandOutputs: Record<string, CommandOutput>;
+  runId: number | null;
+  status: RunStatus | null;
+}) {
+  const entries = Object.entries(commandOutputs);
+  if (!status && entries.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="border-t border-border bg-slate-900 px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-white">运行输出</h3>
+        <span className="text-xs text-slate-400">
+          {runId ? `Run #${runId}` : '等待启动'} · {status ?? 'pending'}
+        </span>
+      </div>
+      <div className="max-h-56 space-y-2 overflow-auto">
+        {entries.map(([commandId, output]) => (
+          <details className="rounded-md border border-border bg-slate-950" key={commandId} open={output.status === 'running'}>
+            <summary className="cursor-pointer px-3 py-2 text-sm text-slate-200">
+              {commandId} · {output.status}
+            </summary>
+            <pre className="whitespace-pre-wrap border-t border-border px-3 py-2 text-xs text-slate-200">
+              {output.stdout}
+              {output.stderr ? `\n[stderr]\n${output.stderr}` : ''}
+            </pre>
+          </details>
+        ))}
+      </div>
+    </div>
   );
 }

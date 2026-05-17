@@ -31,6 +31,10 @@ interface AutoPipelineApi {
     delete: (id: string) => Promise<void>;
     reorder: (unitId: string, orderedIds: string[]) => Promise<void>;
   };
+  runs: {
+    start: (pipelineId: number) => Promise<unknown>;
+    onEvent: (callback: (event: unknown) => void) => () => void;
+  };
 }
 
 const api: AutoPipelineApi = {
@@ -63,6 +67,14 @@ const api: AutoPipelineApi = {
     save: (unitId, commands) => ipcRenderer.invoke('commands:save', unitId, commands) as Promise<void>,
     delete: (id) => ipcRenderer.invoke('commands:delete', id) as Promise<void>,
     reorder: (unitId, orderedIds) => ipcRenderer.invoke('commands:reorder', unitId, orderedIds) as Promise<void>,
+  },
+  runs: {
+    start: (pipelineId) => ipcRenderer.invoke('runs:start', pipelineId),
+    onEvent: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+      ipcRenderer.on('runs:event', listener);
+      return () => ipcRenderer.removeListener('runs:event', listener);
+    },
   },
 };
 

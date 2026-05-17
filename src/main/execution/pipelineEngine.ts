@@ -29,6 +29,8 @@ export class PipelineEngine {
     }
     this.runningPipelineIds.add(pipelineId);
     const runId = this.createRun(pipelineId);
+    emit({ type: 'run-status', runId, status: 'pending' });
+    this.markRunRunning(runId);
     emit({ type: 'run-status', runId, status: 'running' });
     const started = Date.now();
 
@@ -55,7 +57,7 @@ export class PipelineEngine {
             const onFailure = command.type === 'shell' ? command.config.onFailure : 'stop';
             if (onFailure === 'stop') {
               runStatus = 'failed';
-              this.skipNotStarted(runId, orderedUnits, unitId, command.id);
+              this.skipNotStarted(runId, orderedUnits, unitId, command.id, emit);
               this.finishRun(runId, runStatus, started);
               emit({ type: 'run-status', runId, status: runStatus });
               return { id: runId, pipelineId, status: runStatus };
@@ -79,6 +81,7 @@ export class PipelineEngine {
     const started = Date.now();
     let stdout = '';
     let stderr = '';
+    emit({ type: 'command-status', runId, commandId: command.id, status: 'pending' });
     emit({ type: 'command-status', runId, commandId: command.id, status: 'running' });
     const result = await this.localExecutor.execute(command, (streamEvent) => {
       if (streamEvent.type === 'stdout') {
@@ -96,9 +99,13 @@ export class PipelineEngine {
 
   private createRun(pipelineId: number) {
     const result = this.db
-      .prepare("insert into runs (pipeline_id, status, started_at) values (?, 'running', current_timestamp)")
+      .prepare("insert into runs (pipeline_id, status, started_at) values (?, 'pending', current_timestamp)")
       .run(pipelineId);
     return Number(result.lastInsertRowid);
+  }
+
+  private markRunRunning(runId: number) {
+    this.db.prepare("update runs set status = 'running' where id = ?").run(runId);
   }
 
   private finishRun(runId: number, status: RunStatus, started: number) {
@@ -126,7 +133,13 @@ export class PipelineEngine {
       .run(runId, command.id, command.unitId, command.config.name, status, stdout, stderr, exitCode, durationMs);
   }
 
-  private skipNotStarted(runId: number, orderedUnits: string[], currentUnitId: string, failedCommandId: string) {
+  private skipNotStarted(
+    runId: number,
+    orderedUnits: string[],
+    currentUnitId: string,
+    failedCommandId: string,
+    emit: (event: ExecutionEvent) => void,
+  ) {
     let afterFailedCommand = false;
     let afterCurrentUnit = false;
     for (const unitId of orderedUnits) {
@@ -138,6 +151,7 @@ export class PipelineEngine {
           }
           if (afterFailedCommand) {
             this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
+            emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
           }
         }
         afterCurrentUnit = true;
@@ -146,6 +160,7 @@ export class PipelineEngine {
       if (afterCurrentUnit) {
         for (const command of this.commands.listCommands(unitId)) {
           this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
+          emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
         }
       }
     }

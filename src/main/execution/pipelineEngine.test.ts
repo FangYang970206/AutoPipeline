@@ -22,13 +22,14 @@ function setup(executor: LocalCommandExecutor) {
     edges: [{ source: 'unit-a', target: 'unit-b' }],
   });
 
-  return { commands, db, engine, pipeline };
+  return { commands, db, engine, pipeline, pipelines };
 }
 
 describe('PipelineEngine', () => {
   it('executes local shell commands in DAG order and records streamed output', async () => {
     const executed: string[] = [];
     const events: Array<{ type: string; data: string }> = [];
+    const statuses: string[] = [];
     const { commands, db, engine, pipeline } = setup({
       execute: async (command, emit) => {
         executed.push(command.config.name);
@@ -47,11 +48,25 @@ describe('PipelineEngine', () => {
       if (event.type === 'stdout') {
         events.push(event);
       }
+      if (event.type === 'run-status' || event.type === 'command-status') {
+        statuses.push(`${event.type}:${event.status}`);
+      }
     });
 
     expect(run.status).toBe('succeeded');
     expect(executed).toEqual(['Build', 'Deploy']);
     expect(events.map((event) => event.data)).toEqual(['Build\n', 'Deploy\n']);
+    expect(statuses).toEqual([
+      'run-status:pending',
+      'run-status:running',
+      'command-status:pending',
+      'command-status:running',
+      'command-status:succeeded',
+      'command-status:pending',
+      'command-status:running',
+      'command-status:succeeded',
+      'run-status:succeeded',
+    ]);
     expect(db.prepare('select status from runs where id = ?').get(run.id)).toEqual({ status: 'succeeded' });
     expect(db.prepare('select command_name, status, stdout from command_results order by id').all()).toEqual([
       { command_name: 'Build', status: 'succeeded', stdout: 'Build\n' },
@@ -105,5 +120,48 @@ describe('PipelineEngine', () => {
     await expect(engine.runPipeline(pipeline.id)).rejects.toThrow(PipelineAlreadyRunningError);
     release();
     await firstRun;
+  });
+
+  it('allows different pipelines to run concurrently', async () => {
+    const releases: Array<() => void> = [];
+    let started = 0;
+    let markStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      markStarted = () => {
+        started += 1;
+        if (started === 2) {
+          resolve();
+        }
+      };
+    });
+    const { commands, engine, pipeline, pipelines } = setup({
+      execute: async () => {
+        markStarted();
+        await new Promise<void>((resolveRun) => {
+          releases.push(resolveRun);
+        });
+        return { exitCode: 0 };
+      },
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build-a', type: 'shell', order: 0, config: { name: 'Build A', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    const otherPipeline = pipelines.createPipeline({ name: 'Deploy Worker', folderId: null });
+    pipelines.savePipelineGraph(otherPipeline.id, {
+      units: [{ id: 'unit-c', name: 'Build C', position: { x: 0, y: 0 } }],
+      edges: [],
+    });
+    commands.saveCommands('unit-c', [
+      { id: 'cmd-build-c', type: 'shell', order: 0, config: { name: 'Build C', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    const firstRun = engine.runPipeline(pipeline.id);
+    const secondRun = engine.runPipeline(otherPipeline.id);
+
+    await bothStarted;
+    for (const release of releases) {
+      release();
+    }
+    await Promise.all([firstRun, secondRun]);
   });
 });
