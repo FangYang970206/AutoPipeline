@@ -1,19 +1,3 @@
-export type ViewId = 'pipelines' | 'fileBrowser' | 'servers' | 'settings';
-
-export interface AutoPipelineApi {
-  app: {
-    getVersion: () => Promise<string>;
-    ping: () => Promise<'pong'>;
-  };
-  servers: {
-    list: () => Promise<ServerRecord[]>;
-    create: (input: ServerInput) => Promise<ServerRecord>;
-    update: (id: number, input: ServerInput) => Promise<ServerRecord>;
-    delete: (id: number) => Promise<void>;
-    testConnection: (input: ServerInput) => Promise<ConnectionTestResult>;
-  };
-}
-
 export type ServerAuthMethod = 'password' | 'key';
 
 export interface ServerRecord {
@@ -45,12 +29,4 @@ export interface ServerInput {
   keepaliveInterval: number;
   defaultDirectory?: string;
   notes?: string;
-}
-
-export type ConnectionTestResult = { ok: true } | { ok: false; message: string };
-
-declare global {
-  interface Window {
-    autoPipeline?: AutoPipelineApi;
-  }
 }

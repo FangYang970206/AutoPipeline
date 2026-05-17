@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { registerServerHandlers } from './serverHandlers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -24,12 +25,13 @@ function createWindow() {
     void win.loadURL('http://127.0.0.1:5173');
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
-    void win.loadFile(path.join(__dirname, '../dist/index.html'));
+    void win.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
 }
 
 ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('app:ping', () => 'pong');
+registerServerHandlers();
 
 void app.whenReady().then(() => {
   createWindow();
