@@ -26,6 +26,14 @@ export function migratePipelineSchema(db: Database) {
       position text not null
     );
 
+    create table if not exists commands (
+      id text primary key,
+      unit_id text not null references execution_units(id) on delete cascade,
+      command_order integer not null,
+      type text not null check (type in ('shell', 'transfer')),
+      config text not null
+    );
+
     create table if not exists runs (
       id integer primary key autoincrement,
       pipeline_id integer not null references pipelines(id) on delete cascade,
