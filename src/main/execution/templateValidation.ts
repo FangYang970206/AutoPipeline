@@ -1,10 +1,11 @@
 import type { CommandInput } from '../command/types.js';
-import { extractTemplateReferences, parseNamedOutputs } from './namedOutputs.js';
+import { extractParameterReferences, extractTemplateReferences, parseNamedOutputs } from './namedOutputs.js';
 
 export interface TemplateValidationInput {
   units: Array<{ id: string; name: string }>;
   edges: Array<{ source: string; target: string }>;
   commandsByUnit: Map<string, CommandInput[]>;
+  parameterNames?: string[];
 }
 
 export function validateTemplateReferences(input: TemplateValidationInput): string[] {
@@ -15,6 +16,11 @@ export function validateTemplateReferences(input: TemplateValidationInput): stri
     for (const command of input.commandsByUnit.get(currentUnit.id) ?? []) {
       if (command.type !== 'shell') {
         continue;
+      }
+      for (const parameterName of extractParameterReferences(command.config.script)) {
+        if (!(input.parameterNames ?? []).includes(parameterName)) {
+          errors.push(`Unknown parameter: ${parameterName}`);
+        }
       }
       for (const reference of extractTemplateReferences(command.config.script)) {
         const referencedUnit = unitsByName.get(reference.unitName);

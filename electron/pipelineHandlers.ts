@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron';
 import { PipelineRepository } from '../src/main/pipeline/pipelineRepository.js';
-import type { PipelineGraph } from '../src/main/pipeline/types.js';
+import type { PipelineGraph, PipelineParameter } from '../src/main/pipeline/types.js';
 import { getDatabase } from './database.js';
 
 export function registerPipelineHandlers() {
@@ -22,5 +22,8 @@ export function registerPipelineHandlers() {
   ipcMain.handle('pipelines:get-graph', (_event, id: number) => repository.getPipelineGraph(id));
   ipcMain.handle('pipelines:save-graph', (_event, id: number, graph: PipelineGraph) =>
     repository.savePipelineGraph(id, graph),
+  );
+  ipcMain.handle('pipelines:update-parameters', (_event, id: number, parameters: PipelineParameter[]) =>
+    repository.updateParameters(id, parameters),
   );
 }

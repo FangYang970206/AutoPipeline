@@ -82,6 +82,19 @@ describe('PipelineRepository', () => {
     });
   });
 
+  it('stores pipeline parameter definitions', () => {
+    const { repository } = createRepository();
+    const pipeline = repository.createPipeline({ name: 'Deploy API', folderId: null });
+
+    const updated = repository.updateParameters(pipeline.id, [
+      { name: 'env', type: 'select', defaultValue: 'prod', options: ['staging', 'prod'] },
+    ]);
+
+    expect(updated.parameters).toEqual([
+      { name: 'env', type: 'select', defaultValue: 'prod', options: ['staging', 'prod'] },
+    ]);
+  });
+
   it('preserves commands and updates template references when an execution unit is renamed', () => {
     const { db, repository } = createRepository();
     const pipeline = repository.createPipeline({ name: 'Deploy API', folderId: null });

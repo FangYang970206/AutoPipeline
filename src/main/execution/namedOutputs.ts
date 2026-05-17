@@ -9,6 +9,7 @@ export interface TemplateReference {
 
 const outputPattern = /^::set-output name=([A-Za-z_][A-Za-z0-9_-]*)::(.*)$/;
 const templatePattern = /\{\{\s*([^.{}]+)\.([^.{}]+)\.([A-Za-z0-9_-]+)\s*\}\}/g;
+const parameterPattern = /\{\{\s*params\.([A-Za-z_][A-Za-z0-9_-]*)\s*\}\}/g;
 
 export function parseNamedOutputs(stdout: string): NamedOutputs {
   const outputs: NamedOutputs = {};
@@ -21,8 +22,15 @@ export function parseNamedOutputs(stdout: string): NamedOutputs {
   return outputs;
 }
 
-export function substituteTemplate(script: string, context: OutputContext): string {
-  return script.replace(templatePattern, (raw, unitName: string, commandName: string, key: string) => {
+export function substituteTemplate(script: string, context: OutputContext, parameters: Record<string, unknown> = {}): string {
+  const withParameters = script.replace(parameterPattern, (raw, name: string) => {
+    const value = parameters[name];
+    if (value === undefined) {
+      throw new Error(`Unknown parameter reference: ${raw}`);
+    }
+    return String(value);
+  });
+  return withParameters.replace(templatePattern, (raw, unitName: string, commandName: string, key: string) => {
     const value = context[unitName.trim()]?.[commandName.trim()]?.[key];
     if (value === undefined) {
       throw new Error(`Unknown template reference: ${raw}`);
@@ -38,6 +46,10 @@ export function extractTemplateReferences(script: string): TemplateReference[] {
     commandName: match[2].trim(),
     key: match[3],
   }));
+}
+
+export function extractParameterReferences(script: string): string[] {
+  return [...script.matchAll(parameterPattern)].map((match) => match[1]);
 }
 
 export function renameUnitReferences(script: string, oldName: string, newName: string): string {

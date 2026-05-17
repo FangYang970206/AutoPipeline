@@ -107,8 +107,8 @@ export class CommandRepository {
     nextCommands: CommandInput[],
     commandRenames: Array<{ unitName: string; oldName: string; newName: string }>,
   ) {
-    const pipeline = this.db.prepare('select dag_edges from pipelines where id = ?').get(pipelineId) as
-      | { dag_edges: string }
+    const pipeline = this.db.prepare('select dag_edges, parameters from pipelines where id = ?').get(pipelineId) as
+      | { dag_edges: string; parameters: string }
       | undefined;
     const units = this.db.prepare('select id, name from execution_units where pipeline_id = ? order by rowid').all(pipelineId) as Array<{
       id: string;
@@ -136,6 +136,9 @@ export class CommandRepository {
       units,
       edges: pipeline ? (JSON.parse(pipeline.dag_edges) as Array<{ source: string; target: string }>) : [],
       commandsByUnit,
+      parameterNames: pipeline
+        ? (JSON.parse(pipeline.parameters) as Array<{ name: string }>).map((parameter) => parameter.name)
+        : [],
     };
   }
 }

@@ -15,6 +15,7 @@ export function migratePipelineSchema(db: Database) {
       name text not null,
       folder_id integer references folders(id) on delete set null,
       dag_edges text not null default '[]',
+      parameters text not null default '[]',
       created_at text not null default current_timestamp,
       updated_at text not null default current_timestamp
     );
@@ -61,4 +62,12 @@ export function migratePipelineSchema(db: Database) {
       created_at text not null default current_timestamp
     );
   `);
+  ensureColumn(db, 'pipelines', 'parameters', "text not null default '[]'");
+}
+
+function ensureColumn(db: Database, table: string, column: string, definition: string) {
+  const columns = db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`alter table ${table} add column ${column} ${definition}`);
+  }
 }

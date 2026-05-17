@@ -126,6 +126,7 @@ describe('App shell', () => {
       name: 'Deploy API',
       folderId: 1,
       dagEdges: [],
+      parameters: [],
       createdAt: '2026-05-18T00:00:00Z',
       updatedAt: '2026-05-18T00:00:00Z',
     });
@@ -154,6 +155,7 @@ describe('App shell', () => {
                 name: 'Deploy API',
                 folderId: 1,
                 dagEdges: [],
+                parameters: [],
                 createdAt: '2026-05-18T00:00:00Z',
                 updatedAt: '2026-05-18T00:00:00Z',
               },
@@ -203,6 +205,7 @@ describe('App shell', () => {
                 name: 'Deploy API',
                 folderId: 1,
                 dagEdges: [],
+                parameters: [],
                 createdAt: '2026-05-18T00:00:00Z',
                 updatedAt: '2026-05-18T00:00:00Z',
               },
@@ -275,6 +278,15 @@ function createPipelineApiMock() {
     deletePipeline: vi.fn(),
     getGraph: vi.fn().mockResolvedValue({ units: [], edges: [] }),
     saveGraph: vi.fn(),
+    updateParameters: vi.fn().mockImplementation(async (id, parameters) => ({
+      id,
+      name: 'Deploy API',
+      folderId: null,
+      dagEdges: [],
+      parameters,
+      createdAt: '2026-05-18T00:00:00Z',
+      updatedAt: '2026-05-18T00:00:00Z',
+    })),
   };
 }
 

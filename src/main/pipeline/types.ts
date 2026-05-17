@@ -11,8 +11,18 @@ export interface PipelineRecord {
   name: string;
   folderId: number | null;
   dagEdges: unknown[];
+  parameters: PipelineParameter[];
   createdAt: string;
   updatedAt: string;
+}
+
+export type PipelineParameterType = 'string' | 'number' | 'boolean' | 'select';
+
+export interface PipelineParameter {
+  name: string;
+  type: PipelineParameterType;
+  defaultValue: string | number | boolean;
+  options?: string[];
 }
 
 export interface PipelineTreeFolder extends FolderRecord {
