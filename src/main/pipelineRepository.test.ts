@@ -59,4 +59,25 @@ describe('PipelineRepository', () => {
     expect(db.prepare('select count(*) as count from runs').get()).toEqual({ count: 0 });
     expect(db.prepare('select count(*) as count from command_results').get()).toEqual({ count: 0 });
   });
+
+  it('saves and loads execution units with DAG edges', () => {
+    const { repository } = createRepository();
+    const pipeline = repository.createPipeline({ name: 'Deploy API', folderId: null });
+
+    repository.savePipelineGraph(pipeline.id, {
+      units: [
+        { id: 'unit-a', name: 'Build', position: { x: 10, y: 20 } },
+        { id: 'unit-b', name: 'Deploy', position: { x: 220, y: 20 } },
+      ],
+      edges: [{ source: 'unit-a', target: 'unit-b' }],
+    });
+
+    expect(repository.getPipelineGraph(pipeline.id)).toEqual({
+      units: [
+        { id: 'unit-a', name: 'Build', position: { x: 10, y: 20 } },
+        { id: 'unit-b', name: 'Deploy', position: { x: 220, y: 20 } },
+      ],
+      edges: [{ source: 'unit-a', target: 'unit-b' }],
+    });
+  });
 });

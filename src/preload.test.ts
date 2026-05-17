@@ -49,6 +49,8 @@ describe('preload contract', () => {
         }),
         getPipelineDeleteImpact: async () => ({ runCount: 0 }),
         deletePipeline: async () => undefined,
+        getGraph: async () => ({ units: [], edges: [] }),
+        saveGraph: async () => undefined,
       },
     } satisfies AutoPipelineApi;
 

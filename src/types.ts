@@ -22,6 +22,8 @@ export interface AutoPipelineApi {
     renamePipeline: (id: number, name: string) => Promise<PipelineRecord>;
     getPipelineDeleteImpact: (id: number) => Promise<{ runCount: number }>;
     deletePipeline: (id: number) => Promise<void>;
+    getGraph: (pipelineId: number) => Promise<PipelineGraph>;
+    saveGraph: (pipelineId: number, graph: PipelineGraph) => Promise<void>;
   };
 }
 
@@ -80,6 +82,17 @@ export interface PipelineRecord {
 export interface PipelineTreeFolder extends FolderRecord {
   folders: PipelineTreeFolder[];
   pipelines: PipelineRecord[];
+}
+
+export interface ExecutionUnitRecord {
+  id: string;
+  name: string;
+  position: { x: number; y: number };
+}
+
+export interface PipelineGraph {
+  units: ExecutionUnitRecord[];
+  edges: Array<{ source: string; target: string }>;
 }
 
 declare global {

@@ -19,6 +19,13 @@ export function migratePipelineSchema(db: Database) {
       updated_at text not null default current_timestamp
     );
 
+    create table if not exists execution_units (
+      id text primary key,
+      pipeline_id integer not null references pipelines(id) on delete cascade,
+      name text not null,
+      position text not null
+    );
+
     create table if not exists runs (
       id integer primary key autoincrement,
       pipeline_id integer not null references pipelines(id) on delete cascade,

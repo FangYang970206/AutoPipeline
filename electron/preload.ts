@@ -22,6 +22,8 @@ interface AutoPipelineApi {
     renamePipeline: (id: number, name: string) => Promise<unknown>;
     getPipelineDeleteImpact: (id: number) => Promise<unknown>;
     deletePipeline: (id: number) => Promise<void>;
+    getGraph: (pipelineId: number) => Promise<unknown>;
+    saveGraph: (pipelineId: number, graph: unknown) => Promise<void>;
   };
 }
 
@@ -47,6 +49,8 @@ const api: AutoPipelineApi = {
     renamePipeline: (id, name) => ipcRenderer.invoke('pipelines:rename', id, name),
     getPipelineDeleteImpact: (id) => ipcRenderer.invoke('pipelines:delete-impact', id),
     deletePipeline: (id) => ipcRenderer.invoke('pipelines:delete', id) as Promise<void>,
+    getGraph: (pipelineId) => ipcRenderer.invoke('pipelines:get-graph', pipelineId),
+    saveGraph: (pipelineId, graph) => ipcRenderer.invoke('pipelines:save-graph', pipelineId, graph) as Promise<void>,
   },
 };
 

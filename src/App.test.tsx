@@ -169,5 +169,7 @@ function createPipelineApiMock() {
     renamePipeline: vi.fn(),
     getPipelineDeleteImpact: vi.fn().mockResolvedValue({ runCount: 0 }),
     deletePipeline: vi.fn(),
+    getGraph: vi.fn().mockResolvedValue({ units: [], edges: [] }),
+    saveGraph: vi.fn(),
   };
 }

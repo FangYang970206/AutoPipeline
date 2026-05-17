@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron';
 import { PipelineRepository } from '../src/main/pipeline/pipelineRepository.js';
+import type { PipelineGraph } from '../src/main/pipeline/types.js';
 import { getDatabase } from './database.js';
 
 export function registerPipelineHandlers() {
@@ -18,4 +19,8 @@ export function registerPipelineHandlers() {
   ipcMain.handle('pipelines:rename', (_event, id: number, name: string) => repository.renamePipeline(id, name));
   ipcMain.handle('pipelines:delete-impact', (_event, id: number) => repository.getPipelineDeleteImpact(id));
   ipcMain.handle('pipelines:delete', (_event, id: number) => repository.deletePipeline(id));
+  ipcMain.handle('pipelines:get-graph', (_event, id: number) => repository.getPipelineGraph(id));
+  ipcMain.handle('pipelines:save-graph', (_event, id: number, graph: PipelineGraph) =>
+    repository.savePipelineGraph(id, graph),
+  );
 }

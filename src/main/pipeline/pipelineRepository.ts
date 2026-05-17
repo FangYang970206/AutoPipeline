@@ -1,5 +1,5 @@
 import type { Database } from 'better-sqlite3';
-import type { FolderRecord, PipelineRecord, PipelineTreeFolder } from './types.js';
+import type { FolderRecord, PipelineGraph, PipelineRecord, PipelineTreeFolder } from './types.js';
 
 interface FolderRow {
   id: number;
@@ -55,6 +55,36 @@ export class PipelineRepository {
 
   deletePipeline(id: number): void {
     this.db.prepare('delete from pipelines where id = ?').run(id);
+  }
+
+  savePipelineGraph(pipelineId: number, graph: PipelineGraph): void {
+    const save = this.db.transaction(() => {
+      this.db.prepare('delete from execution_units where pipeline_id = ?').run(pipelineId);
+      const insert = this.db.prepare(
+        'insert into execution_units (id, pipeline_id, name, position) values (?, ?, ?, ?)',
+      );
+      for (const unit of graph.units) {
+        insert.run(unit.id, pipelineId, unit.name, JSON.stringify(unit.position));
+      }
+      this.db
+        .prepare('update pipelines set dag_edges = ?, updated_at = current_timestamp where id = ?')
+        .run(JSON.stringify(graph.edges), pipelineId);
+    });
+
+    save();
+  }
+
+  getPipelineGraph(pipelineId: number): PipelineGraph {
+    const pipeline = this.getPipeline(pipelineId);
+    const units = this.db
+      .prepare('select id, name, position from execution_units where pipeline_id = ? order by rowid')
+      .all(pipelineId)
+      .map((row) => {
+        const unit = row as { id: string; name: string; position: string };
+        return { id: unit.id, name: unit.name, position: JSON.parse(unit.position) as { x: number; y: number } };
+      });
+
+    return { units, edges: pipeline.dagEdges as Array<{ source: string; target: string }> };
   }
 
   getTree(): PipelineTreeFolder[] {
