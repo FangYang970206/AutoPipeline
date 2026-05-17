@@ -10,6 +10,6 @@
     "rootDir": "..",
     "types": ["node"]
   },
-  "include": ["*.ts", "../src/main/server/**/*.ts", "../src/main/pipeline/**/*.ts"],
+  "include": ["*.ts", "../src/main/server/**/*.ts", "../src/main/pipeline/**/*.ts", "../src/main/command/**/*.ts"],
   "exclude": ["../src/**/*.test.ts", "../src/**/*.test.tsx"]
 }

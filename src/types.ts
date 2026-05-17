@@ -25,6 +25,12 @@ export interface AutoPipelineApi {
     getGraph: (pipelineId: number) => Promise<PipelineGraph>;
     saveGraph: (pipelineId: number, graph: PipelineGraph) => Promise<void>;
   };
+  commands: {
+    list: (unitId: string) => Promise<CommandRecord[]>;
+    save: (unitId: string, commands: CommandInput[]) => Promise<void>;
+    delete: (id: string) => Promise<void>;
+    reorder: (unitId: string, orderedIds: string[]) => Promise<void>;
+  };
 }
 
 export type ServerAuthMethod = 'password' | 'key';
@@ -94,6 +100,39 @@ export interface PipelineGraph {
   units: ExecutionUnitRecord[];
   edges: Array<{ source: string; target: string }>;
 }
+
+export type CommandType = 'shell' | 'transfer';
+export type ShellFailureMode = 'stop' | 'continue' | 'skip_unit';
+
+export interface ShellCommandConfig {
+  name: string;
+  script: string;
+  serverId: number | null;
+  shellType: 'powershell' | 'cmd';
+  timeout?: number;
+  onFailure: ShellFailureMode;
+}
+
+export interface TransferCommandConfig {
+  name: string;
+  direction: 'upload' | 'download';
+  source: string;
+  destination: string;
+  overwriteMode: 'overwrite' | 'skip' | 'error';
+  serverId: number | null;
+}
+
+export type CommandConfig = ShellCommandConfig | TransferCommandConfig;
+
+export interface CommandRecord {
+  id: string;
+  unitId: string;
+  order: number;
+  type: CommandType;
+  config: CommandConfig;
+}
+
+export type CommandInput = Omit<CommandRecord, 'unitId'>;
 
 declare global {
   interface Window {

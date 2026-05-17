@@ -25,6 +25,12 @@ interface AutoPipelineApi {
     getGraph: (pipelineId: number) => Promise<unknown>;
     saveGraph: (pipelineId: number, graph: unknown) => Promise<void>;
   };
+  commands: {
+    list: (unitId: string) => Promise<unknown>;
+    save: (unitId: string, commands: unknown) => Promise<void>;
+    delete: (id: string) => Promise<void>;
+    reorder: (unitId: string, orderedIds: string[]) => Promise<void>;
+  };
 }
 
 const api: AutoPipelineApi = {
@@ -51,6 +57,12 @@ const api: AutoPipelineApi = {
     deletePipeline: (id) => ipcRenderer.invoke('pipelines:delete', id) as Promise<void>,
     getGraph: (pipelineId) => ipcRenderer.invoke('pipelines:get-graph', pipelineId),
     saveGraph: (pipelineId, graph) => ipcRenderer.invoke('pipelines:save-graph', pipelineId, graph) as Promise<void>,
+  },
+  commands: {
+    list: (unitId) => ipcRenderer.invoke('commands:list', unitId),
+    save: (unitId, commands) => ipcRenderer.invoke('commands:save', unitId, commands) as Promise<void>,
+    delete: (id) => ipcRenderer.invoke('commands:delete', id) as Promise<void>,
+    reorder: (unitId, orderedIds) => ipcRenderer.invoke('commands:reorder', unitId, orderedIds) as Promise<void>,
   },
 };
 

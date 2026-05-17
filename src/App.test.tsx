@@ -59,6 +59,7 @@ describe('App shell', () => {
         testConnection: vi.fn().mockResolvedValue({ ok: true }),
       },
       pipelines: createPipelineApiMock(),
+      commands: createCommandApiMock(),
     };
 
     render(<App />);
@@ -131,6 +132,7 @@ describe('App shell', () => {
           },
         ]),
       },
+      commands: createCommandApiMock(),
     };
 
     render(<App />);
@@ -155,6 +157,15 @@ function createServerApiMock() {
     update: vi.fn(),
     delete: vi.fn(),
     testConnection: vi.fn().mockResolvedValue({ ok: true }),
+  };
+}
+
+function createCommandApiMock() {
+  return {
+    list: vi.fn().mockResolvedValue([]),
+    save: vi.fn(),
+    delete: vi.fn(),
+    reorder: vi.fn(),
   };
 }
 
