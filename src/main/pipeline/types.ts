@@ -19,3 +19,14 @@ export interface PipelineTreeFolder extends FolderRecord {
   folders: PipelineTreeFolder[];
   pipelines: PipelineRecord[];
 }
+
+export interface ExecutionUnitRecord {
+  id: string;
+  name: string;
+  position: { x: number; y: number };
+}
+
+export interface PipelineGraph {
+  units: ExecutionUnitRecord[];
+  edges: Array<{ source: string; target: string }>;
+}
