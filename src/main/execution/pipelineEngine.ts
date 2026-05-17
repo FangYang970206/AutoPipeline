@@ -21,6 +21,7 @@ export class PipelineEngine {
     private readonly pipelines: PipelineRepository,
     private readonly commands: CommandRepository,
     private readonly localExecutor: LocalCommandExecutor,
+    private readonly remoteExecutor?: LocalCommandExecutor,
   ) {}
 
   async runPipeline(pipelineId: number, emit: (event: ExecutionEvent) => void = () => {}): Promise<RunRecord> {
@@ -83,14 +84,25 @@ export class PipelineEngine {
     let stderr = '';
     emit({ type: 'command-status', runId, commandId: command.id, status: 'pending' });
     emit({ type: 'command-status', runId, commandId: command.id, status: 'running' });
-    const result = await this.localExecutor.execute(command, (streamEvent) => {
-      if (streamEvent.type === 'stdout') {
-        stdout += streamEvent.data;
-      } else {
-        stderr += streamEvent.data;
-      }
-      emit({ ...streamEvent, runId, commandId: command.id });
-    });
+    const executor =
+      command.type === 'shell' && command.config.serverId !== null && this.remoteExecutor
+        ? this.remoteExecutor
+        : this.localExecutor;
+    const result = await executor
+      .execute(command, (streamEvent) => {
+        if (streamEvent.type === 'stdout') {
+          stdout += streamEvent.data;
+        } else {
+          stderr += streamEvent.data;
+        }
+        emit({ ...streamEvent, runId, commandId: command.id });
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Command execution failed';
+        stderr += message;
+        emit({ type: 'stderr', runId, commandId: command.id, data: message });
+        return { exitCode: 1 };
+      });
     const status = result.exitCode === 0 ? 'succeeded' : 'failed';
     this.recordCommandResult(runId, command, status, stdout, stderr, result.exitCode, Date.now() - started);
     emit({ type: 'command-status', runId, commandId: command.id, status });

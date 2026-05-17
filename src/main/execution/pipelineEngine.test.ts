@@ -164,4 +164,68 @@ describe('PipelineEngine', () => {
     }
     await Promise.all([firstRun, secondRun]);
   });
+
+  it('routes shell commands with a server to the remote executor', async () => {
+    const localExecuted: string[] = [];
+    const remoteExecuted: string[] = [];
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = on');
+    migratePipelineSchema(db);
+    const pipelines = new PipelineRepository(db);
+    const commands = new CommandRepository(db);
+    const engine = new PipelineEngine(
+      db,
+      pipelines,
+      commands,
+      {
+        execute: async (command) => {
+          localExecuted.push(command.config.name);
+          return { exitCode: 0 };
+        },
+      },
+      {
+        execute: async (command, emit) => {
+          remoteExecuted.push(command.config.name);
+          emit({ type: 'stdout', data: 'remote\n' });
+          return { exitCode: 0 };
+        },
+      },
+    );
+    const pipeline = pipelines.createPipeline({ name: 'Deploy API', folderId: null });
+    pipelines.savePipelineGraph(pipeline.id, {
+      units: [{ id: 'unit-a', name: 'Build', position: { x: 0, y: 0 } }],
+      edges: [],
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-local', type: 'shell', order: 0, config: { name: 'Local', script: 'echo local', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+      { id: 'cmd-remote', type: 'shell', order: 1, config: { name: 'Remote', script: 'echo remote', serverId: 1, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    await expect(engine.runPipeline(pipeline.id)).resolves.toMatchObject({ status: 'succeeded' });
+
+    expect(localExecuted).toEqual(['Local']);
+    expect(remoteExecuted).toEqual(['Remote']);
+    expect(db.prepare('select command_name, stdout from command_results order by id').all()).toEqual([
+      { command_name: 'Local', stdout: '' },
+      { command_name: 'Remote', stdout: 'remote\n' },
+    ]);
+  });
+
+  it('records executor connection errors as command failures', async () => {
+    const { commands, db, engine, pipeline } = setup({
+      execute: async () => {
+        throw new Error('Authentication failed');
+      },
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-remote', type: 'shell', order: 0, config: { name: 'Remote', script: 'echo remote', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    const run = await engine.runPipeline(pipeline.id);
+
+    expect(run.status).toBe('failed');
+    expect(db.prepare('select command_name, status, stderr from command_results order by id').all()).toEqual([
+      { command_name: 'Remote', status: 'failed', stderr: 'Authentication failed' },
+    ]);
+  });
 });
