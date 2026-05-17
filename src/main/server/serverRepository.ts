@@ -1,6 +1,6 @@
 import type { Database } from 'better-sqlite3';
-import type { CredentialStore } from './credentialStore';
-import type { ServerInput, ServerRecord } from './types';
+import type { CredentialStore } from './credentialStore.js';
+import type { ServerInput, ServerRecord } from './types.js';
 
 interface PipelineReferenceProvider {
   findPipelineNamesUsingServer(serverId: number): string[];
@@ -76,6 +76,45 @@ export class ServerRepository {
       });
 
     const id = Number(result.lastInsertRowid);
+    await this.storeCredentials(id, input);
+    return this.get(id);
+  }
+
+  async update(id: number, input: ServerInput): Promise<ServerRecord> {
+    validateServerInput(input);
+
+    this.db
+      .prepare(
+        `update servers
+            set display_name = @displayName,
+                host = @host,
+                port = @port,
+                username = @username,
+                auth_method = @authMethod,
+                key_path = @keyPath,
+                connection_timeout = @connectionTimeout,
+                keepalive_interval = @keepaliveInterval,
+                default_directory = @defaultDirectory,
+                notes = @notes,
+                updated_at = current_timestamp
+          where id = @id`,
+      )
+      .run({
+        id,
+        displayName: input.displayName.trim(),
+        host: input.host.trim(),
+        port: input.port,
+        username: input.username.trim(),
+        authMethod: input.authMethod,
+        keyPath: input.keyPath?.trim() || null,
+        connectionTimeout: input.connectionTimeout,
+        keepaliveInterval: input.keepaliveInterval,
+        defaultDirectory: input.defaultDirectory?.trim() || null,
+        notes: input.notes?.trim() || '',
+      });
+
+    await this.credentials.deletePassword(id);
+    await this.credentials.deleteKeyPassphrase(id);
     await this.storeCredentials(id, input);
     return this.get(id);
   }

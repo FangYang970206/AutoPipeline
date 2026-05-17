@@ -1,5 +1,5 @@
 import { Client } from 'ssh2';
-import type { ServerInput } from './types';
+import type { ServerInput } from './types.js';
 
 export type ConnectionTestResult = { ok: true } | { ok: false; message: string };
 
