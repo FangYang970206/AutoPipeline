@@ -1,4 +1,5 @@
 import type { Database } from 'better-sqlite3';
+import { renameUnitReferences } from '../execution/namedOutputs.js';
 import type { FolderRecord, PipelineGraph, PipelineRecord, PipelineTreeFolder } from './types.js';
 
 interface FolderRow {
@@ -58,13 +59,27 @@ export class PipelineRepository {
   }
 
   savePipelineGraph(pipelineId: number, graph: PipelineGraph): void {
+    const previousUnits = this.db
+      .prepare('select id, name from execution_units where pipeline_id = ?')
+      .all(pipelineId) as Array<{ id: string; name: string }>;
     const save = this.db.transaction(() => {
-      this.db.prepare('delete from execution_units where pipeline_id = ?').run(pipelineId);
+      const nextIds = new Set(graph.units.map((unit) => unit.id));
+      for (const previousUnit of previousUnits) {
+        if (!nextIds.has(previousUnit.id)) {
+          this.db.prepare('delete from execution_units where id = ?').run(previousUnit.id);
+        }
+      }
       const insert = this.db.prepare(
-        'insert into execution_units (id, pipeline_id, name, position) values (?, ?, ?, ?)',
+        `insert into execution_units (id, pipeline_id, name, position)
+         values (?, ?, ?, ?)
+         on conflict(id) do update set name = excluded.name, position = excluded.position`,
       );
       for (const unit of graph.units) {
         insert.run(unit.id, pipelineId, unit.name, JSON.stringify(unit.position));
+        const previous = previousUnits.find((item) => item.id === unit.id);
+        if (previous && previous.name !== unit.name) {
+          this.updateShellScriptsInPipeline(pipelineId, (script) => renameUnitReferences(script, previous.name, unit.name));
+        }
       }
       this.db
         .prepare('update pipelines set dag_edges = ?, updated_at = current_timestamp where id = ?')
@@ -72,6 +87,25 @@ export class PipelineRepository {
     });
 
     save();
+  }
+
+  private updateShellScriptsInPipeline(pipelineId: number, rewrite: (script: string) => string) {
+    const rows = this.db
+      .prepare(
+        `select commands.id, commands.config
+           from commands
+           join execution_units on execution_units.id = commands.unit_id
+          where execution_units.pipeline_id = ? and commands.type = 'shell'`,
+      )
+      .all(pipelineId) as Array<{ id: string; config: string }>;
+    const update = this.db.prepare('update commands set config = ? where id = ?');
+    for (const row of rows) {
+      const config = JSON.parse(row.config) as { script: string };
+      const nextScript = rewrite(config.script);
+      if (nextScript !== config.script) {
+        update.run(JSON.stringify({ ...config, script: nextScript }), row.id);
+      }
+    }
   }
 
   getPipelineGraph(pipelineId: number): PipelineGraph {

@@ -1,5 +1,11 @@
 export type NamedOutputs = Record<string, string>;
 export type OutputContext = Record<string, Record<string, NamedOutputs>>;
+export interface TemplateReference {
+  raw: string;
+  unitName: string;
+  commandName: string;
+  key: string;
+}
 
 const outputPattern = /^::set-output name=([A-Za-z_][A-Za-z0-9_-]*)::(.*)$/;
 const templatePattern = /\{\{\s*([^.{}]+)\.([^.{}]+)\.([A-Za-z0-9_-]+)\s*\}\}/g;
@@ -25,6 +31,42 @@ export function substituteTemplate(script: string, context: OutputContext): stri
   });
 }
 
+export function extractTemplateReferences(script: string): TemplateReference[] {
+  return [...script.matchAll(templatePattern)].map((match) => ({
+    raw: match[0],
+    unitName: match[1].trim(),
+    commandName: match[2].trim(),
+    key: match[3],
+  }));
+}
+
+export function renameUnitReferences(script: string, oldName: string, newName: string): string {
+  return rewriteTemplateReferences(script, (reference) =>
+    reference.unitName === oldName ? { ...reference, unitName: newName } : reference,
+  );
+}
+
+export function renameCommandReferences(
+  script: string,
+  unitName: string,
+  oldCommandName: string,
+  newCommandName: string,
+): string {
+  return rewriteTemplateReferences(script, (reference) =>
+    reference.unitName === unitName && reference.commandName === oldCommandName
+      ? { ...reference, commandName: newCommandName }
+      : reference,
+  );
+}
+
+export function listTemplateCompletions(context: OutputContext): string[] {
+  return Object.entries(context).flatMap(([unitName, commands]) =>
+    Object.entries(commands).flatMap(([commandName, outputs]) =>
+      Object.keys(outputs).map((key) => `{{${unitName}.${commandName}.${key}}}`),
+    ),
+  );
+}
+
 export function storeOutputs(
   context: OutputContext,
   unitName: string,
@@ -41,4 +83,17 @@ export function storeOutputs(
       [commandName]: outputs,
     },
   };
+}
+
+function rewriteTemplateReferences(
+  script: string,
+  rewrite: (reference: Omit<TemplateReference, 'raw'>) => Omit<TemplateReference, 'raw'>,
+): string {
+  return script.replace(templatePattern, (raw, unitName: string, commandName: string, key: string) => {
+    const next = rewrite({ unitName: unitName.trim(), commandName: commandName.trim(), key });
+    if (next.unitName === unitName.trim() && next.commandName === commandName.trim() && next.key === key) {
+      return raw;
+    }
+    return `{{${next.unitName}.${next.commandName}.${next.key}}}`;
+  });
 }

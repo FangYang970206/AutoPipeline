@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { migratePipelineSchema } from './pipeline/schema';
 import { PipelineRepository } from './pipeline/pipelineRepository';
+import { CommandRepository } from './command/commandRepository';
 
 function createRepository() {
   const db = new Database(':memory:');
@@ -79,5 +80,35 @@ describe('PipelineRepository', () => {
       ],
       edges: [{ source: 'unit-a', target: 'unit-b' }],
     });
+  });
+
+  it('preserves commands and updates template references when an execution unit is renamed', () => {
+    const { db, repository } = createRepository();
+    const pipeline = repository.createPipeline({ name: 'Deploy API', folderId: null });
+    repository.savePipelineGraph(pipeline.id, {
+      units: [
+        { id: 'unit-a', name: 'Build', position: { x: 10, y: 20 } },
+        { id: 'unit-b', name: 'Deploy', position: { x: 220, y: 20 } },
+      ],
+      edges: [{ source: 'unit-a', target: 'unit-b' }],
+    });
+    const commands = new CommandRepository(db);
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Image', script: '::set-output name=tag::v1', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-b', [
+      { id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy {{Build.Image.tag}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    repository.savePipelineGraph(pipeline.id, {
+      units: [
+        { id: 'unit-a', name: 'Package', position: { x: 10, y: 20 } },
+        { id: 'unit-b', name: 'Deploy', position: { x: 220, y: 20 } },
+      ],
+      edges: [{ source: 'unit-a', target: 'unit-b' }],
+    });
+
+    expect(commands.listCommands('unit-a')).toHaveLength(1);
+    expect(commands.listCommands('unit-b')[0].config).toMatchObject({ script: 'deploy {{Package.Image.tag}}' });
   });
 });

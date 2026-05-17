@@ -39,4 +39,4 @@ export interface TransferCommandRecord {
 }
 
 export type CommandRecord = ShellCommandRecord | TransferCommandRecord;
-export type CommandInput = Omit<CommandRecord, 'unitId'>;
+export type CommandInput = Omit<ShellCommandRecord, 'unitId'> | Omit<TransferCommandRecord, 'unitId'>;

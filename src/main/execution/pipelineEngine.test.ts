@@ -244,7 +244,7 @@ describe('PipelineEngine', () => {
       },
     });
     commands.saveCommands('unit-a', [
-      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build Image', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build Image', script: '::set-output name=tag::v1.2.3', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
     ]);
     commands.saveCommands('unit-b', [
       { id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy {{Build.Build Image.tag}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
@@ -252,7 +252,7 @@ describe('PipelineEngine', () => {
 
     await expect(engine.runPipeline(pipeline.id)).resolves.toMatchObject({ status: 'succeeded' });
 
-    expect(executedScripts).toEqual(['build', 'deploy v1.2.3']);
+    expect(executedScripts).toEqual(['::set-output name=tag::v1.2.3', 'deploy v1.2.3']);
     expect(db.prepare('select command_name, named_outputs from command_results order by id').all()).toEqual([
       { command_name: 'Build Image', named_outputs: '{"tag":"v1.2.3"}' },
       { command_name: 'Deploy', named_outputs: '{}' },
