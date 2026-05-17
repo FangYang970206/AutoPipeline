@@ -38,14 +38,25 @@ export function migratePipelineSchema(db: Database) {
       id integer primary key autoincrement,
       pipeline_id integer not null references pipelines(id) on delete cascade,
       status text not null,
+      started_at text,
+      completed_at text,
+      duration_ms integer,
       created_at text not null default current_timestamp
     );
 
     create table if not exists command_results (
       id integer primary key autoincrement,
       run_id integer not null references runs(id) on delete cascade,
+      command_id text,
+      unit_id text,
       command_name text not null,
       status text not null,
+      stdout text not null default '',
+      stderr text not null default '',
+      exit_code integer,
+      started_at text,
+      completed_at text,
+      duration_ms integer,
       created_at text not null default current_timestamp
     );
   `);

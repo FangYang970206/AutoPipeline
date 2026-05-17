@@ -124,14 +124,23 @@ export interface TransferCommandConfig {
 
 export type CommandConfig = ShellCommandConfig | TransferCommandConfig;
 
-export interface CommandRecord {
+export interface ShellCommandRecord {
   id: string;
   unitId: string;
   order: number;
-  type: CommandType;
-  config: CommandConfig;
+  type: 'shell';
+  config: ShellCommandConfig;
 }
 
+export interface TransferCommandRecord {
+  id: string;
+  unitId: string;
+  order: number;
+  type: 'transfer';
+  config: TransferCommandConfig;
+}
+
+export type CommandRecord = ShellCommandRecord | TransferCommandRecord;
 export type CommandInput = Omit<CommandRecord, 'unitId'>;
 
 declare global {

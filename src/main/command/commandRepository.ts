@@ -1,5 +1,5 @@
 import type { Database } from 'better-sqlite3';
-import type { CommandInput, CommandRecord, CommandType } from './types.js';
+import type { CommandConfig, CommandInput, CommandRecord, CommandType, ShellCommandConfig, TransferCommandConfig } from './types.js';
 
 interface CommandRow {
   id: string;
@@ -51,11 +51,22 @@ export class CommandRepository {
 }
 
 function mapCommand(row: CommandRow): CommandRecord {
+  const config = JSON.parse(row.config) as CommandConfig;
+  if (row.type === 'shell') {
+    return {
+      id: row.id,
+      unitId: row.unit_id,
+      order: row.command_order,
+      type: row.type,
+      config: config as ShellCommandConfig,
+    };
+  }
+
   return {
     id: row.id,
     unitId: row.unit_id,
     order: row.command_order,
     type: row.type,
-    config: JSON.parse(row.config) as CommandRecord['config'],
+    config: config as TransferCommandConfig,
   };
 }
