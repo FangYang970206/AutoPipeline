@@ -58,7 +58,7 @@ export class PipelineRepository {
   }
 
   getTree(): PipelineTreeFolder[] {
-    return this.buildTree(this.listFolders(), this.listPipelines());
+    return this.buildTree(this.listFolders(), this.listPipelines(), true);
   }
 
   search(query: string): PipelineTreeFolder[] {
@@ -69,7 +69,7 @@ export class PipelineRepository {
 
     const folders = this.listFolders();
     const pipelines = this.listPipelines().filter((pipeline) => pipeline.name.toLocaleLowerCase().includes(normalized));
-    return this.buildTree(folders, pipelines).filter((folder) => folder.pipelines.length > 0 || folder.folders.length > 0);
+    return this.buildTree(folders, pipelines, false);
   }
 
   private getFolder(id: number): FolderRecord {
@@ -102,7 +102,7 @@ export class PipelineRepository {
       .map((row) => mapPipeline(row as PipelineRow));
   }
 
-  private buildTree(folders: FolderRecord[], pipelines: PipelineRecord[]): PipelineTreeFolder[] {
+  private buildTree(folders: FolderRecord[], pipelines: PipelineRecord[], includeEmpty: boolean): PipelineTreeFolder[] {
     const byId = new Map<number, PipelineTreeFolder>();
     for (const folder of folders) {
       byId.set(folder.id, { ...folder, folders: [], pipelines: [] });
@@ -123,7 +123,7 @@ export class PipelineRepository {
       }
     }
 
-    return roots.filter((folder) => folder.pipelines.length > 0 || folder.folders.length > 0);
+    return includeEmpty ? roots : roots.filter((folder) => folder.pipelines.length > 0 || folder.folders.length > 0);
   }
 }
 

@@ -15,6 +15,41 @@ describe('preload contract', () => {
         delete: async () => undefined,
         testConnection: async () => ({ ok: true }),
       },
+      pipelines: {
+        tree: async () => [],
+        search: async () => [],
+        createFolder: async (input) => ({
+          ...(input as { name: string; parentId: number | null }),
+          id: 1,
+          createdAt: '2026-05-18T00:00:00Z',
+          updatedAt: '2026-05-18T00:00:00Z',
+        }),
+        renameFolder: async (id, name) => ({
+          id,
+          name,
+          parentId: null,
+          createdAt: '2026-05-18T00:00:00Z',
+          updatedAt: '2026-05-18T00:00:00Z',
+        }),
+        deleteFolder: async () => undefined,
+        createPipeline: async (input) => ({
+          ...(input as { name: string; folderId: number | null }),
+          id: 1,
+          dagEdges: [],
+          createdAt: '2026-05-18T00:00:00Z',
+          updatedAt: '2026-05-18T00:00:00Z',
+        }),
+        renamePipeline: async (id, name) => ({
+          id,
+          name,
+          folderId: null,
+          dagEdges: [],
+          createdAt: '2026-05-18T00:00:00Z',
+          updatedAt: '2026-05-18T00:00:00Z',
+        }),
+        getPipelineDeleteImpact: async () => ({ runCount: 0 }),
+        deletePipeline: async () => undefined,
+      },
     } satisfies AutoPipelineApi;
 
     await expect(api.app.ping()).resolves.toBe('pong');

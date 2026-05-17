@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { registerPipelineHandlers } from './pipelineHandlers.js';
 import { registerServerHandlers } from './serverHandlers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,6 +32,7 @@ function createWindow() {
 
 ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('app:ping', () => 'pong');
+registerPipelineHandlers();
 registerServerHandlers();
 
 void app.whenReady().then(() => {
