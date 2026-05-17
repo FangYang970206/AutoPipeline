@@ -10,9 +10,10 @@ describe('validateTemplateReferences', () => {
           { id: 'unit-b', name: 'Deploy' },
         ],
         edges: [{ source: 'unit-a', target: 'unit-b' }],
+        parameterNames: ['env'],
         commandsByUnit: new Map([
           ['unit-a', [{ id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Image', script: '::set-output name=tag::v1', serverId: null, shellType: 'cmd', onFailure: 'stop' } }]],
-          ['unit-b', [{ id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy {{Build.Image.tag}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } }]],
+          ['unit-b', [{ id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy {{Build.Image.tag}} {{params.env}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } }]],
         ]),
       }),
     ).toEqual([]);
@@ -28,7 +29,7 @@ describe('validateTemplateReferences', () => {
       edges: [{ source: 'unit-a', target: 'unit-b' }],
       commandsByUnit: new Map([
         ['unit-a', [{ id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Image', script: 'use {{Deploy.Release.tag}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } }]],
-        ['unit-b', [{ id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Release', script: 'use {{Missing.Image.tag}} {{Audit.Check.tag}} {{Build.Image.missing}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } }]],
+        ['unit-b', [{ id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Release', script: 'use {{params.env}} {{Missing.Image.tag}} {{Audit.Check.tag}} {{Build.Image.missing}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } }]],
         ['unit-c', [{ id: 'cmd-audit', type: 'shell', order: 0, config: { name: 'Check', script: '::set-output name=tag::ok', serverId: null, shellType: 'cmd', onFailure: 'stop' } }]],
       ]),
     });
@@ -36,6 +37,7 @@ describe('validateTemplateReferences', () => {
     expect(errors).toEqual([
       'Unknown template output: {{Deploy.Release.tag}}',
       'Template reference is not upstream: {{Deploy.Release.tag}}',
+      'Unknown parameter: env',
       'Unknown template unit: Missing',
       'Template reference is not upstream: {{Audit.Check.tag}}',
       'Unknown template output: {{Build.Image.missing}}',

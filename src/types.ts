@@ -24,6 +24,7 @@ export interface AutoPipelineApi {
     deletePipeline: (id: number) => Promise<void>;
     getGraph: (pipelineId: number) => Promise<PipelineGraph>;
     saveGraph: (pipelineId: number, graph: PipelineGraph) => Promise<void>;
+    updateParameters: (pipelineId: number, parameters: PipelineParameter[]) => Promise<PipelineRecord>;
   };
   commands: {
     list: (unitId: string) => Promise<CommandRecord[]>;
@@ -32,7 +33,7 @@ export interface AutoPipelineApi {
     reorder: (unitId: string, orderedIds: string[]) => Promise<void>;
   };
   runs: {
-    start: (pipelineId: number) => Promise<RunRecord>;
+    start: (pipelineId: number, parameters?: Record<string, unknown>) => Promise<RunRecord>;
     onEvent: (callback: (event: ExecutionEvent) => void) => () => void;
   };
 }
@@ -85,8 +86,18 @@ export interface PipelineRecord {
   name: string;
   folderId: number | null;
   dagEdges: unknown[];
+  parameters: PipelineParameter[];
   createdAt: string;
   updatedAt: string;
+}
+
+export type PipelineParameterType = 'string' | 'number' | 'boolean' | 'select';
+
+export interface PipelineParameter {
+  name: string;
+  type: PipelineParameterType;
+  defaultValue: string | number | boolean;
+  options?: string[];
 }
 
 export interface PipelineTreeFolder extends FolderRecord {

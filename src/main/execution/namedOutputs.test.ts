@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractTemplateReferences,
+  extractParameterReferences,
   listTemplateCompletions,
   parseNamedOutputs,
   renameCommandReferences,
@@ -20,11 +21,15 @@ describe('named output templates', () => {
     const context = storeOutputs({}, 'Build', 'Image', { tag: 'v1.2.3' });
 
     expect(substituteTemplate('deploy {{Build.Image.tag}}', context)).toBe('deploy v1.2.3');
+    expect(substituteTemplate('deploy {{params.env}}', context, { env: 'prod' })).toBe('deploy prod');
   });
 
   it('fails clearly when a template reference is missing', () => {
     expect(() => substituteTemplate('deploy {{Build.Image.tag}}', {})).toThrow(
       'Unknown template reference: {{Build.Image.tag}}',
+    );
+    expect(() => substituteTemplate('deploy {{params.env}}', {}, {})).toThrow(
+      'Unknown parameter reference: {{params.env}}',
     );
   });
 
@@ -32,6 +37,7 @@ describe('named output templates', () => {
     expect(extractTemplateReferences('deploy {{ Build.Image.tag }}')).toEqual([
       { raw: '{{ Build.Image.tag }}', unitName: 'Build', commandName: 'Image', key: 'tag' },
     ]);
+    expect(extractParameterReferences('deploy {{params.env}}')).toEqual(['env']);
     expect(listTemplateCompletions({ Build: { Image: { tag: 'v1.2.3' } } })).toEqual(['{{Build.Image.tag}}']);
   });
 

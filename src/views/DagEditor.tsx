@@ -13,7 +13,14 @@ import {
 } from '@xyflow/react';
 import { Button } from '../components/ui/button';
 import { validateDag } from '../main/dag/dagValidation';
-import type { CommandExecutionStatus, ExecutionEvent, PipelineGraph, PipelineRecord, RunStatus } from '../types';
+import type {
+  CommandExecutionStatus,
+  ExecutionEvent,
+  PipelineGraph,
+  PipelineParameter,
+  PipelineRecord,
+  RunStatus,
+} from '../types';
 import { CommandPanel } from './CommandPanel';
 
 type UnitNode = Node<{ label: string }>;
@@ -28,9 +35,14 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedUnit, setSelectedUnit] = useState<{ id: string; name: string } | null>(null);
   const [message, setMessage] = useState('');
+  const [parameters, setParameters] = useState<PipelineParameter[]>(pipeline.parameters ?? []);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [commandOutputs, setCommandOutputs] = useState<Record<string, CommandOutput>>({});
+
+  useEffect(() => {
+    setParameters(pipeline.parameters ?? []);
+  }, [pipeline.id, pipeline.parameters]);
 
   useEffect(() => {
     if (!api) {
@@ -123,7 +135,7 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
     setCommandOutputs({});
     setMessage('Pipeline 运行中');
     try {
-      const run = await runsApi.start(pipeline.id);
+      const run = await runsApi.start(pipeline.id, collectParameterValues(parameters));
       setActiveRunId(run.id);
       setRunStatus(run.status);
       setMessage(run.status === 'succeeded' ? 'Pipeline 运行成功' : 'Pipeline 运行失败');
@@ -131,6 +143,16 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
       setRunStatus('failed');
       setMessage(error instanceof Error ? error.message : 'Pipeline 运行失败');
     }
+  }
+
+  async function saveParameters() {
+    if (!api) {
+      setMessage('IPC bridge unavailable');
+      return;
+    }
+    const updated = await api.updateParameters(pipeline.id, parameters);
+    setParameters(updated.parameters);
+    setMessage('参数已保存');
   }
 
   function handleExecutionEvent(event: ExecutionEvent) {
@@ -199,10 +221,75 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
       <p aria-live="polite" className="min-h-8 border-t border-border px-3 py-2 text-sm text-slate-300">
         {message}
       </p>
+      <ParameterEditor parameters={parameters} onChange={setParameters} onSave={() => void saveParameters()} />
       <RunViewer commandOutputs={commandOutputs} runId={activeRunId} status={runStatus} />
       </div>
       {selectedUnit ? <CommandPanel unitId={selectedUnit.id} unitName={selectedUnit.name} /> : null}
     </section>
+  );
+}
+
+function ParameterEditor({
+  onChange,
+  onSave,
+  parameters,
+}: {
+  onChange: (parameters: PipelineParameter[]) => void;
+  onSave: () => void;
+  parameters: PipelineParameter[];
+}) {
+  function update(index: number, patch: Partial<PipelineParameter>) {
+    onChange(parameters.map((parameter, currentIndex) => (currentIndex === index ? { ...parameter, ...patch } : parameter)));
+  }
+
+  return (
+    <div className="border-t border-border bg-slate-900 px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-white">参数</h3>
+        <div className="flex gap-2">
+          <Button
+            onClick={() => onChange([...parameters, { name: `param${parameters.length + 1}`, type: 'string', defaultValue: '' }])}
+            type="button"
+            variant="ghost"
+          >
+            添加参数
+          </Button>
+          <Button onClick={onSave} type="button" variant="ghost">
+            保存参数
+          </Button>
+        </div>
+      </div>
+      <div className="grid gap-2">
+        {parameters.map((parameter, index) => (
+          <div className="grid grid-cols-[1fr_110px_1fr_1fr_auto] gap-2" key={`${parameter.name}-${index}`}>
+            <input className={inputClass} value={parameter.name} onChange={(event) => update(index, { name: event.target.value })} />
+            <select
+              className={inputClass}
+              value={parameter.type}
+              onChange={(event) => update(index, { type: event.target.value as PipelineParameter['type'] })}
+            >
+              <option value="string">string</option>
+              <option value="number">number</option>
+              <option value="boolean">boolean</option>
+              <option value="select">select</option>
+            </select>
+            <input
+              className={inputClass}
+              value={String(parameter.defaultValue)}
+              onChange={(event) => update(index, { defaultValue: coerceParameterValue(parameter.type, event.target.value) })}
+            />
+            <input
+              className={inputClass}
+              value={parameter.options?.join(',') ?? ''}
+              onChange={(event) => update(index, { options: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })}
+            />
+            <Button onClick={() => onChange(parameters.filter((_, currentIndex) => currentIndex !== index))} type="button" variant="ghost">
+              删除
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -244,3 +331,28 @@ function RunViewer({
     </div>
   );
 }
+
+function collectParameterValues(parameters: PipelineParameter[]) {
+  return Object.fromEntries(
+    parameters.map((parameter) => {
+      if (parameter.type === 'boolean') {
+        return [parameter.name, window.confirm(`${parameter.name}?`)];
+      }
+      const value = window.prompt(parameter.name, String(parameter.defaultValue));
+      return [parameter.name, coerceParameterValue(parameter.type, value ?? parameter.defaultValue)];
+    }),
+  );
+}
+
+function coerceParameterValue(type: PipelineParameter['type'], value: string | number | boolean) {
+  if (type === 'number') {
+    return Number(value);
+  }
+  if (type === 'boolean') {
+    return value === true || value === 'true';
+  }
+  return String(value);
+}
+
+const inputClass =
+  'h-9 rounded-md border border-border bg-slate-950 px-3 text-sm text-white outline-none focus:border-accent';

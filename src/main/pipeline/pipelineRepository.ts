@@ -1,6 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import { renameUnitReferences } from '../execution/namedOutputs.js';
-import type { FolderRecord, PipelineGraph, PipelineRecord, PipelineTreeFolder } from './types.js';
+import type { FolderRecord, PipelineGraph, PipelineParameter, PipelineRecord, PipelineTreeFolder } from './types.js';
 
 interface FolderRow {
   id: number;
@@ -15,6 +15,7 @@ interface PipelineRow {
   name: string;
   folder_id: number | null;
   dag_edges: string;
+  parameters: string;
   created_at: string;
   updated_at: string;
 }
@@ -47,6 +48,14 @@ export class PipelineRepository {
 
   renamePipeline(id: number, name: string): PipelineRecord {
     this.db.prepare('update pipelines set name = ?, updated_at = current_timestamp where id = ?').run(requireName(name), id);
+    return this.getPipeline(id);
+  }
+
+  updateParameters(id: number, parameters: PipelineParameter[]): PipelineRecord {
+    validateParameters(parameters);
+    this.db
+      .prepare('update pipelines set parameters = ?, updated_at = current_timestamp where id = ?')
+      .run(JSON.stringify(parameters), id);
     return this.getPipeline(id);
   }
 
@@ -215,7 +224,25 @@ function mapPipeline(row: PipelineRow): PipelineRecord {
     name: row.name,
     folderId: row.folder_id,
     dagEdges: JSON.parse(row.dag_edges) as unknown[],
+    parameters: JSON.parse(row.parameters ?? '[]') as PipelineParameter[],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function validateParameters(parameters: PipelineParameter[]) {
+  const names = new Set<string>();
+  for (const parameter of parameters) {
+    const name = parameter.name.trim();
+    if (!name) {
+      throw new Error('Parameter name is required');
+    }
+    if (names.has(name)) {
+      throw new Error(`Duplicate parameter: ${name}`);
+    }
+    names.add(name);
+    if (parameter.type === 'select' && (!parameter.options || parameter.options.length === 0)) {
+      throw new Error(`Select parameter requires options: ${name}`);
+    }
+  }
 }

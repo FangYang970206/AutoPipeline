@@ -25,7 +25,13 @@ export class PipelineEngine {
     private readonly remoteExecutor?: LocalCommandExecutor,
   ) {}
 
-  async runPipeline(pipelineId: number, emit: (event: ExecutionEvent) => void = () => {}): Promise<RunRecord> {
+  async runPipeline(
+    pipelineId: number,
+    parametersOrEmit: Record<string, unknown> | ((event: ExecutionEvent) => void) = {},
+    maybeEmit: (event: ExecutionEvent) => void = () => {},
+  ): Promise<RunRecord> {
+    const parameters = typeof parametersOrEmit === 'function' ? {} : parametersOrEmit;
+    const emit = typeof parametersOrEmit === 'function' ? parametersOrEmit : maybeEmit;
     if (this.runningPipelineIds.has(pipelineId)) {
       throw new PipelineAlreadyRunningError(pipelineId);
     }
@@ -60,6 +66,7 @@ export class PipelineEngine {
             runId,
             command,
             outputContext,
+            parameters,
             emit,
           );
           outputContext = storeOutputs(outputContext, unitNames.get(unitId) ?? unitId, command.config.name, result.outputs);
@@ -91,6 +98,7 @@ export class PipelineEngine {
     runId: number,
     originalCommand: CommandRecord,
     outputContext: OutputContext,
+    parameters: Record<string, unknown>,
     emit: (event: ExecutionEvent) => void,
   ) {
     const started = Date.now();
@@ -100,7 +108,7 @@ export class PipelineEngine {
     emit({ type: 'command-status', runId, commandId: command.id, status: 'pending' });
     emit({ type: 'command-status', runId, commandId: command.id, status: 'running' });
     try {
-      command = prepareCommand(originalCommand, outputContext);
+      command = prepareCommand(originalCommand, outputContext, parameters);
     } catch (error) {
       stderr = error instanceof Error ? error.message : 'Template substitution failed';
       emit({ type: 'stderr', runId, commandId: command.id, data: stderr });
@@ -216,7 +224,7 @@ export class PipelineEngine {
   }
 }
 
-function prepareCommand(command: CommandRecord, context: OutputContext): CommandRecord {
+function prepareCommand(command: CommandRecord, context: OutputContext, parameters: Record<string, unknown>): CommandRecord {
   if (command.type !== 'shell') {
     return command;
   }
@@ -224,7 +232,7 @@ function prepareCommand(command: CommandRecord, context: OutputContext): Command
     ...command,
     config: {
       ...command.config,
-      script: substituteTemplate(command.config.script, context),
+      script: substituteTemplate(command.config.script, context, parameters),
     },
   };
 }

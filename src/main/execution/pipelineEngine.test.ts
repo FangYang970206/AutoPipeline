@@ -258,4 +258,25 @@ describe('PipelineEngine', () => {
       { command_name: 'Deploy', named_outputs: '{}' },
     ]);
   });
+
+  it('substitutes run parameters into shell commands', async () => {
+    const executedScripts: string[] = [];
+    const { commands, engine, pipeline, pipelines } = setup({
+      execute: async (command) => {
+        if (command.type !== 'shell') {
+          throw new Error('Expected shell command');
+        }
+        executedScripts.push(command.config.script);
+        return { exitCode: 0 };
+      },
+    });
+    pipelines.updateParameters(pipeline.id, [{ name: 'env', type: 'string', defaultValue: 'dev' }]);
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy {{params.env}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    await expect(engine.runPipeline(pipeline.id, { env: 'prod' })).resolves.toMatchObject({ status: 'succeeded' });
+
+    expect(executedScripts).toEqual(['deploy prod']);
+  });
 });

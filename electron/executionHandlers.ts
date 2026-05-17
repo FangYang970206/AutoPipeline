@@ -22,8 +22,8 @@ export function registerExecutionHandlers() {
     new RemoteShellExecutor(servers, sshPool),
   );
 
-  ipcMain.handle('runs:start', (event, pipelineId: number) =>
-    engine.runPipeline(pipelineId, (payload) => {
+  ipcMain.handle('runs:start', (event, pipelineId: number, parameters?: Record<string, unknown>) =>
+    engine.runPipeline(pipelineId, parameters ?? {}, (payload) => {
       event.sender.send('runs:event', payload);
     }),
   );

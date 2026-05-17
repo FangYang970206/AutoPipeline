@@ -24,6 +24,7 @@ interface AutoPipelineApi {
     deletePipeline: (id: number) => Promise<void>;
     getGraph: (pipelineId: number) => Promise<unknown>;
     saveGraph: (pipelineId: number, graph: unknown) => Promise<void>;
+    updateParameters: (pipelineId: number, parameters: unknown) => Promise<unknown>;
   };
   commands: {
     list: (unitId: string) => Promise<unknown>;
@@ -32,7 +33,7 @@ interface AutoPipelineApi {
     reorder: (unitId: string, orderedIds: string[]) => Promise<void>;
   };
   runs: {
-    start: (pipelineId: number) => Promise<unknown>;
+    start: (pipelineId: number, parameters?: unknown) => Promise<unknown>;
     onEvent: (callback: (event: unknown) => void) => () => void;
   };
 }
@@ -61,6 +62,7 @@ const api: AutoPipelineApi = {
     deletePipeline: (id) => ipcRenderer.invoke('pipelines:delete', id) as Promise<void>,
     getGraph: (pipelineId) => ipcRenderer.invoke('pipelines:get-graph', pipelineId),
     saveGraph: (pipelineId, graph) => ipcRenderer.invoke('pipelines:save-graph', pipelineId, graph) as Promise<void>,
+    updateParameters: (pipelineId, parameters) => ipcRenderer.invoke('pipelines:update-parameters', pipelineId, parameters),
   },
   commands: {
     list: (unitId) => ipcRenderer.invoke('commands:list', unitId),
@@ -69,7 +71,7 @@ const api: AutoPipelineApi = {
     reorder: (unitId, orderedIds) => ipcRenderer.invoke('commands:reorder', unitId, orderedIds) as Promise<void>,
   },
   runs: {
-    start: (pipelineId) => ipcRenderer.invoke('runs:start', pipelineId),
+    start: (pipelineId, parameters) => ipcRenderer.invoke('runs:start', pipelineId, parameters),
     onEvent: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
       ipcRenderer.on('runs:event', listener);
