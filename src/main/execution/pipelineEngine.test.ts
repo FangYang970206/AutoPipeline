@@ -210,4 +210,22 @@ describe('PipelineEngine', () => {
       { command_name: 'Remote', stdout: 'remote\n' },
     ]);
   });
+
+  it('records executor connection errors as command failures', async () => {
+    const { commands, db, engine, pipeline } = setup({
+      execute: async () => {
+        throw new Error('Authentication failed');
+      },
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-remote', type: 'shell', order: 0, config: { name: 'Remote', script: 'echo remote', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    const run = await engine.runPipeline(pipeline.id);
+
+    expect(run.status).toBe('failed');
+    expect(db.prepare('select command_name, status, stderr from command_results order by id').all()).toEqual([
+      { command_name: 'Remote', status: 'failed', stderr: 'Authentication failed' },
+    ]);
+  });
 });

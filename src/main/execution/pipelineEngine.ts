@@ -88,14 +88,21 @@ export class PipelineEngine {
       command.type === 'shell' && command.config.serverId !== null && this.remoteExecutor
         ? this.remoteExecutor
         : this.localExecutor;
-    const result = await executor.execute(command, (streamEvent) => {
-      if (streamEvent.type === 'stdout') {
-        stdout += streamEvent.data;
-      } else {
-        stderr += streamEvent.data;
-      }
-      emit({ ...streamEvent, runId, commandId: command.id });
-    });
+    const result = await executor
+      .execute(command, (streamEvent) => {
+        if (streamEvent.type === 'stdout') {
+          stdout += streamEvent.data;
+        } else {
+          stderr += streamEvent.data;
+        }
+        emit({ ...streamEvent, runId, commandId: command.id });
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Command execution failed';
+        stderr += message;
+        emit({ type: 'stderr', runId, commandId: command.id, data: message });
+        return { exitCode: 1 };
+      });
     const status = result.exitCode === 0 ? 'succeeded' : 'failed';
     this.recordCommandResult(runId, command, status, stdout, stderr, result.exitCode, Date.now() - started);
     emit({ type: 'command-status', runId, commandId: command.id, status });
