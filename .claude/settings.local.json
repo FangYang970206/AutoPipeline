@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"D:\\\\AI_Project\\\\AutoPipeline\" /s /b)",
+      "Bash(findstr /E \"\\\\.\\(json|yml|yaml|config\\)$\")"
+    ]
+  }
+}
