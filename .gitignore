@@ -5,6 +5,7 @@ yarn.lock
 
 # Build output
 dist/
+dist-electron/
 build/
 out/
 .electron/
