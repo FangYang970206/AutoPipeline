@@ -17,6 +17,22 @@ function createRepository() {
   return new CommandRepository(db);
 }
 
+function createPipelineWithCommands() {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = on');
+  migratePipelineSchema(db);
+  const pipelines = new PipelineRepository(db);
+  const pipeline = pipelines.createPipeline({ name: 'Deploy API', folderId: null });
+  pipelines.savePipelineGraph(pipeline.id, {
+    units: [
+      { id: 'unit-a', name: 'Build', position: { x: 0, y: 0 } },
+      { id: 'unit-b', name: 'Deploy', position: { x: 200, y: 0 } },
+    ],
+    edges: [{ source: 'unit-a', target: 'unit-b' }],
+  });
+  return { commands: new CommandRepository(db), pipelines };
+}
+
 describe('CommandRepository', () => {
   it('saves ordered shell and transfer commands for an ExecutionUnit', () => {
     const repository = createRepository();
@@ -69,5 +85,34 @@ describe('CommandRepository', () => {
     expect(repository.listCommands('unit-a')).toEqual([
       expect.objectContaining({ id: 'cmd-2', order: 0 }),
     ]);
+  });
+
+  it('updates template references when a command is renamed', () => {
+    const { commands } = createPipelineWithCommands();
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Image', script: '::set-output name=tag::v1', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-b', [
+      { id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy {{Build.Image.tag}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Container', script: '::set-output name=tag::v1', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    expect(commands.listCommands('unit-b')[0].config).toMatchObject({ script: 'deploy {{Build.Container.tag}}' });
+  });
+
+  it('rejects invalid template references when commands are saved', () => {
+    const { commands } = createPipelineWithCommands();
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Image', script: '::set-output name=tag::v1', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    expect(() =>
+      commands.saveCommands('unit-b', [
+        { id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy {{Deploy.Image.tag}} {{Build.Image.missing}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+      ]),
+    ).toThrow('Unknown template command: Deploy.Image; Unknown template output: {{Build.Image.missing}}');
   });
 });

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CommandRepository } from '../command/commandRepository';
 import { InMemoryCredentialStore } from '../server/credentialStore';
 import { ServerRepository } from '../server/serverRepository';
+import { migratePipelineSchema } from '../pipeline/schema';
 import { migrateServerSchema } from '../server/schema';
 import { RemoteShellExecutor } from './remoteShellExecutor';
 import { SshConnectionPool } from './sshConnectionPool';
@@ -64,6 +65,7 @@ describe('RemoteShellExecutor', () => {
 async function setup(port: number) {
   const db = new Database(':memory:');
   migrateServerSchema(db);
+  migratePipelineSchema(db);
   const credentials = new InMemoryCredentialStore();
   const servers = new ServerRepository(db, credentials, { findPipelineNamesUsingServer: () => [] });
   const serverRecord = await servers.create({
@@ -79,19 +81,7 @@ async function setup(port: number) {
   const pool = new SshConnectionPool(credentials, { idleTimeoutMs: 1000 });
   const commands = new CommandRepository(db);
   db.exec(`
-    create table execution_units (
-      id text primary key,
-      pipeline_id integer not null,
-      name text not null,
-      position text not null
-    );
-    create table commands (
-      id text primary key,
-      unit_id text not null references execution_units(id) on delete cascade,
-      command_order integer not null,
-      type text not null check (type in ('shell', 'transfer')),
-      config text not null
-    );
+    insert into pipelines (id, name, folder_id, dag_edges) values (1, 'Deploy API', null, '[]');
     insert into execution_units (id, pipeline_id, name, position) values ('unit-a', 1, 'Build', '{}');
   `);
 

@@ -1,4 +1,6 @@
 import type { Database } from 'better-sqlite3';
+import { renameCommandReferences } from '../execution/namedOutputs.js';
+import { validateTemplateReferences } from '../execution/templateValidation.js';
 import type { CommandConfig, CommandInput, CommandRecord, CommandType, ShellCommandConfig, TransferCommandConfig } from './types.js';
 
 interface CommandRow {
@@ -13,6 +15,27 @@ export class CommandRepository {
   constructor(private readonly db: Database) {}
 
   saveCommands(unitId: string, commands: CommandInput[]): void {
+    const unit = this.db.prepare('select pipeline_id, name from execution_units where id = ?').get(unitId) as
+      | { pipeline_id: number; name: string }
+      | undefined;
+    const previousCommands = this.listCommands(unitId);
+    const commandRenames =
+      unit === undefined
+        ? []
+        : commands.flatMap((command) => {
+            const previous = previousCommands.find((item) => item.id === command.id);
+            return previous && previous.config.name !== command.config.name
+              ? [{ unitName: unit.name, oldName: previous.config.name, newName: command.config.name }]
+              : [];
+          });
+    if (unit) {
+      const errors = validateTemplateReferences(
+        this.buildTemplateValidationInput(unit.pipeline_id, unitId, commands, commandRenames),
+      );
+      if (errors.length > 0) {
+        throw new Error(errors.join('; '));
+      }
+    }
     const save = this.db.transaction(() => {
       this.db.prepare('delete from commands where unit_id = ?').run(unitId);
       const insert = this.db.prepare(
@@ -20,6 +43,16 @@ export class CommandRepository {
       );
       for (const command of commands) {
         insert.run(command.id, unitId, command.order, command.type, JSON.stringify(command.config));
+      }
+      if (unit) {
+        for (const command of commands) {
+          const previous = previousCommands.find((item) => item.id === command.id);
+          if (previous && previous.config.name !== command.config.name) {
+            this.updateShellScriptsInPipeline(unit.pipeline_id, (script) =>
+              renameCommandReferences(script, unit.name, previous.config.name, command.config.name),
+            );
+          }
+        }
       }
     });
 
@@ -48,6 +81,82 @@ export class CommandRepository {
   deleteCommand(id: string): void {
     this.db.prepare('delete from commands where id = ?').run(id);
   }
+
+  private updateShellScriptsInPipeline(pipelineId: number, rewrite: (script: string) => string) {
+    const rows = this.db
+      .prepare(
+        `select commands.id, commands.config
+           from commands
+           join execution_units on execution_units.id = commands.unit_id
+          where execution_units.pipeline_id = ? and commands.type = 'shell'`,
+      )
+      .all(pipelineId) as Array<{ id: string; config: string }>;
+    const update = this.db.prepare('update commands set config = ? where id = ?');
+    for (const row of rows) {
+      const config = JSON.parse(row.config) as ShellCommandConfig;
+      const nextScript = rewrite(config.script);
+      if (nextScript !== config.script) {
+        update.run(JSON.stringify({ ...config, script: nextScript }), row.id);
+      }
+    }
+  }
+
+  private buildTemplateValidationInput(
+    pipelineId: number,
+    unitId: string,
+    nextCommands: CommandInput[],
+    commandRenames: Array<{ unitName: string; oldName: string; newName: string }>,
+  ) {
+    const pipeline = this.db.prepare('select dag_edges from pipelines where id = ?').get(pipelineId) as
+      | { dag_edges: string }
+      | undefined;
+    const units = this.db.prepare('select id, name from execution_units where pipeline_id = ? order by rowid').all(pipelineId) as Array<{
+      id: string;
+      name: string;
+    }>;
+    const commandRows = this.db
+      .prepare(
+        `select commands.*
+           from commands
+           join execution_units on execution_units.id = commands.unit_id
+          where execution_units.pipeline_id = ?
+          order by execution_units.rowid, commands.command_order`,
+      )
+      .all(pipelineId) as CommandRow[];
+    const commandsByUnit = new Map<string, CommandInput[]>();
+    for (const row of commandRows) {
+      const { unitId: rowUnitId, ...command } = mapCommand(row);
+      if (rowUnitId === unitId) {
+        continue;
+      }
+      commandsByUnit.set(rowUnitId, [...(commandsByUnit.get(rowUnitId) ?? []), rewriteCommandForValidation(command, commandRenames)]);
+    }
+    commandsByUnit.set(unitId, nextCommands.map((command) => rewriteCommandForValidation(command, commandRenames)));
+    return {
+      units,
+      edges: pipeline ? (JSON.parse(pipeline.dag_edges) as Array<{ source: string; target: string }>) : [],
+      commandsByUnit,
+    };
+  }
+}
+
+function rewriteCommandForValidation(
+  command: CommandInput,
+  commandRenames: Array<{ unitName: string; oldName: string; newName: string }>,
+): CommandInput {
+  if (command.type !== 'shell') {
+    return command;
+  }
+  return {
+    ...command,
+    config: {
+      ...command.config,
+      script: commandRenames.reduce(
+        (script, rename) => renameCommandReferences(script, rename.unitName, rename.oldName, rename.newName),
+        command.config.script,
+      ),
+    },
+  };
 }
 
 function mapCommand(row: CommandRow): CommandRecord {

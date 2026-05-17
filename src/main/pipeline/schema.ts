@@ -54,6 +54,7 @@ export function migratePipelineSchema(db: Database) {
       stdout text not null default '',
       stderr text not null default '',
       exit_code integer,
+      named_outputs text not null default '{}',
       started_at text,
       completed_at text,
       duration_ms integer,

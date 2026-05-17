@@ -2,6 +2,7 @@ import type { Database } from 'better-sqlite3';
 import type { CommandRepository } from '../command/commandRepository.js';
 import type { CommandRecord } from '../command/types.js';
 import type { PipelineRepository } from '../pipeline/pipelineRepository.js';
+import { parseNamedOutputs, storeOutputs, substituteTemplate, type NamedOutputs, type OutputContext } from './namedOutputs.js';
 import type { ExecutionEvent, LocalCommandExecutor, RunRecord, RunStatus } from './types.js';
 
 export type { LocalCommandExecutor } from './types.js';
@@ -37,10 +38,12 @@ export class PipelineEngine {
 
     try {
       const graph = this.pipelines.getPipelineGraph(pipelineId);
+      const unitNames = new Map(graph.units.map((unit) => [unit.id, unit.name]));
       const orderedUnits = topologicalOrder(
         graph.units.map((unit) => unit.id),
         graph.edges,
       );
+      let outputContext: OutputContext = {};
       let runStatus: RunStatus = 'succeeded';
 
       for (const unitId of orderedUnits) {
@@ -53,7 +56,13 @@ export class PipelineEngine {
             continue;
           }
 
-          const result = await this.executeCommand(runId, command, emit);
+          const result = await this.executeCommand(
+            runId,
+            command,
+            outputContext,
+            emit,
+          );
+          outputContext = storeOutputs(outputContext, unitNames.get(unitId) ?? unitId, command.config.name, result.outputs);
           if (result.exitCode !== 0) {
             const onFailure = command.type === 'shell' ? command.config.onFailure : 'stop';
             if (onFailure === 'stop') {
@@ -78,12 +87,27 @@ export class PipelineEngine {
     }
   }
 
-  private async executeCommand(runId: number, command: CommandRecord, emit: (event: ExecutionEvent) => void) {
+  private async executeCommand(
+    runId: number,
+    originalCommand: CommandRecord,
+    outputContext: OutputContext,
+    emit: (event: ExecutionEvent) => void,
+  ) {
     const started = Date.now();
+    let command = originalCommand;
     let stdout = '';
     let stderr = '';
     emit({ type: 'command-status', runId, commandId: command.id, status: 'pending' });
     emit({ type: 'command-status', runId, commandId: command.id, status: 'running' });
+    try {
+      command = prepareCommand(originalCommand, outputContext);
+    } catch (error) {
+      stderr = error instanceof Error ? error.message : 'Template substitution failed';
+      emit({ type: 'stderr', runId, commandId: command.id, data: stderr });
+      this.recordCommandResult(runId, command, 'failed', stdout, stderr, 1, Date.now() - started);
+      emit({ type: 'command-status', runId, commandId: command.id, status: 'failed' });
+      return { exitCode: 1, outputs: {} };
+    }
     const executor =
       command.type === 'shell' && command.config.serverId !== null && this.remoteExecutor
         ? this.remoteExecutor
@@ -104,9 +128,10 @@ export class PipelineEngine {
         return { exitCode: 1 };
       });
     const status = result.exitCode === 0 ? 'succeeded' : 'failed';
-    this.recordCommandResult(runId, command, status, stdout, stderr, result.exitCode, Date.now() - started);
+    const outputs = parseNamedOutputs(stdout);
+    this.recordCommandResult(runId, command, status, stdout, stderr, result.exitCode, Date.now() - started, outputs);
     emit({ type: 'command-status', runId, commandId: command.id, status });
-    return result;
+    return { ...result, outputs };
   }
 
   private createRun(pipelineId: number) {
@@ -134,15 +159,27 @@ export class PipelineEngine {
     stderr: string,
     exitCode: number | null,
     durationMs: number,
+    outputs: NamedOutputs = {},
   ) {
     this.db
       .prepare(
         `insert into command_results (
           run_id, command_id, unit_id, command_name, status, stdout, stderr, exit_code,
-          started_at, completed_at, duration_ms
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, current_timestamp, current_timestamp, ?)`,
+          named_outputs, started_at, completed_at, duration_ms
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp, current_timestamp, ?)`,
       )
-      .run(runId, command.id, command.unitId, command.config.name, status, stdout, stderr, exitCode, durationMs);
+      .run(
+        runId,
+        command.id,
+        command.unitId,
+        command.config.name,
+        status,
+        stdout,
+        stderr,
+        exitCode,
+        JSON.stringify(outputs),
+        durationMs,
+      );
   }
 
   private skipNotStarted(
@@ -177,6 +214,19 @@ export class PipelineEngine {
       }
     }
   }
+}
+
+function prepareCommand(command: CommandRecord, context: OutputContext): CommandRecord {
+  if (command.type !== 'shell') {
+    return command;
+  }
+  return {
+    ...command,
+    config: {
+      ...command.config,
+      script: substituteTemplate(command.config.script, context),
+    },
+  };
 }
 
 function topologicalOrder(nodes: string[], edges: Array<{ source: string; target: string }>) {

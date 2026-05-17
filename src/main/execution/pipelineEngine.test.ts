@@ -228,4 +228,34 @@ describe('PipelineEngine', () => {
       { command_name: 'Remote', status: 'failed', stderr: 'Authentication failed' },
     ]);
   });
+
+  it('stores named outputs and substitutes them into downstream shell commands', async () => {
+    const executedScripts: string[] = [];
+    const { commands, db, engine, pipeline } = setup({
+      execute: async (command, emit) => {
+        if (command.type !== 'shell') {
+          throw new Error('Expected shell command');
+        }
+        executedScripts.push(command.config.script);
+        if (command.config.name === 'Build Image') {
+          emit({ type: 'stdout', data: '::set-output name=tag::v1.2.3\n' });
+        }
+        return { exitCode: 0 };
+      },
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build Image', script: '::set-output name=tag::v1.2.3', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-b', [
+      { id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy {{Build.Build Image.tag}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    await expect(engine.runPipeline(pipeline.id)).resolves.toMatchObject({ status: 'succeeded' });
+
+    expect(executedScripts).toEqual(['::set-output name=tag::v1.2.3', 'deploy v1.2.3']);
+    expect(db.prepare('select command_name, named_outputs from command_results order by id').all()).toEqual([
+      { command_name: 'Build Image', named_outputs: '{"tag":"v1.2.3"}' },
+      { command_name: 'Deploy', named_outputs: '{}' },
+    ]);
+  });
 });

@@ -1,7 +1,17 @@
 import Editor from '@monaco-editor/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../components/ui/button';
-import type { CommandInput, CommandRecord, ServerRecord, ShellCommandConfig, TransferCommandConfig } from '../types';
+import { listTemplateCompletions, parseNamedOutputs, storeOutputs } from '../main/execution/namedOutputs';
+import type { OutputContext } from '../main/execution/namedOutputs';
+import type {
+  CommandInput,
+  CommandRecord,
+  ServerRecord,
+  ShellCommandConfig,
+  ShellCommandRecord,
+  TransferCommandConfig,
+  TransferCommandRecord,
+} from '../types';
 
 export function CommandPanel({ unitId, unitName }: { unitId: string; unitName: string }) {
   const commandApi = window.autoPipeline?.commands;
@@ -9,6 +19,7 @@ export function CommandPanel({ unitId, unitName }: { unitId: string; unitName: s
   const [commands, setCommands] = useState<CommandInput[]>([]);
   const [servers, setServers] = useState<ServerRecord[]>([]);
   const [message, setMessage] = useState('');
+  const templateSuggestions = useMemo(() => buildTemplateSuggestions(unitName, commands), [commands, unitName]);
 
   useEffect(() => {
     if (!commandApi) {
@@ -126,9 +137,15 @@ export function CommandPanel({ unitId, unitName }: { unitId: string; unitName: s
               </div>
             </div>
             {command.type === 'shell' ? (
-              <ShellCommandForm command={command as CommandInput & { config: ShellCommandConfig }} index={index} onChange={updateCommand} servers={servers} />
+              <ShellCommandForm
+                command={command as Omit<ShellCommandRecord, 'unitId'>}
+                index={index}
+                onChange={updateCommand}
+                servers={servers}
+                templateSuggestions={templateSuggestions}
+              />
             ) : (
-              <TransferCommandForm command={command as CommandInput & { config: TransferCommandConfig }} index={index} onChange={updateCommand} servers={servers} />
+              <TransferCommandForm command={command as Omit<TransferCommandRecord, 'unitId'>} index={index} onChange={updateCommand} servers={servers} />
             )}
           </div>
         ))}
@@ -145,11 +162,13 @@ function ShellCommandForm({
   index,
   onChange,
   servers,
+  templateSuggestions,
 }: {
-  command: CommandInput & { config: ShellCommandConfig };
+  command: Omit<ShellCommandRecord, 'unitId'>;
   index: number;
   onChange: (index: number, next: CommandInput) => void;
   servers: ServerRecord[];
+  templateSuggestions: string[];
 }) {
   const update = (config: Partial<ShellCommandConfig>) => onChange(index, { ...command, config: { ...command.config, ...config } });
   return (
@@ -175,7 +194,14 @@ function ShellCommandForm({
           <option value="skip_unit">skip_unit</option>
         </select>
       </div>
-      <Editor height="180px" language="powershell" theme="vs-dark" value={command.config.script} onChange={(value) => update({ script: value ?? '' })} />
+      <Editor
+        beforeMount={(monaco) => registerTemplateCompletions(monaco, templateSuggestions)}
+        height="180px"
+        language="powershell"
+        theme="vs-dark"
+        value={command.config.script}
+        onChange={(value) => update({ script: value ?? '' })}
+      />
     </div>
   );
 }
@@ -186,7 +212,7 @@ function TransferCommandForm({
   onChange,
   servers,
 }: {
-  command: CommandInput & { config: TransferCommandConfig };
+  command: Omit<TransferCommandRecord, 'unitId'>;
   index: number;
   onChange: (index: number, next: CommandInput) => void;
   servers: ServerRecord[];
@@ -220,3 +246,40 @@ function TransferCommandForm({
 
 const inputClass =
   'h-9 rounded-md border border-border bg-slate-900 px-3 text-sm text-white outline-none focus:border-accent';
+
+function buildTemplateSuggestions(unitName: string, commands: CommandInput[]) {
+  let context: OutputContext = {};
+  for (const command of commands) {
+    if (command.type === 'shell') {
+      context = storeOutputs(context, unitName, command.config.name, parseNamedOutputs(command.config.script));
+    }
+  }
+  return listTemplateCompletions(context);
+}
+
+function registerTemplateCompletions(
+  monaco: {
+    languages: {
+      CompletionItemKind: { Variable: number };
+      registerCompletionItemProvider: (
+        language: string,
+        provider: {
+          triggerCharacters: string[];
+          provideCompletionItems: () => { suggestions: Array<{ label: string; kind: number; insertText: string }> };
+        },
+      ) => unknown;
+    };
+  },
+  suggestions: string[],
+) {
+  monaco.languages.registerCompletionItemProvider('powershell', {
+    triggerCharacters: ['{', '.'],
+    provideCompletionItems: () => ({
+      suggestions: suggestions.map((label) => ({
+        label,
+        kind: monaco.languages.CompletionItemKind.Variable,
+        insertText: label,
+      })),
+    }),
+  });
+}
