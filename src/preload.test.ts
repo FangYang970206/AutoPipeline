@@ -52,6 +52,12 @@ describe('preload contract', () => {
         getGraph: async () => ({ units: [], edges: [] }),
         saveGraph: async () => undefined,
       },
+      commands: {
+        list: async () => [],
+        save: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+      },
     } satisfies AutoPipelineApi;
 
     await expect(api.app.ping()).resolves.toBe('pong');

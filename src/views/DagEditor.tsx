@@ -14,6 +14,7 @@ import {
 import { Button } from '../components/ui/button';
 import { validateDag } from '../main/dag/dagValidation';
 import type { PipelineGraph, PipelineRecord } from '../types';
+import { CommandPanel } from './CommandPanel';
 
 type UnitNode = Node<{ label: string }>;
 type UnitEdge = Edge;
@@ -23,6 +24,7 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<UnitNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<UnitEdge>([]);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [selectedUnit, setSelectedUnit] = useState<{ id: string; name: string } | null>(null);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
@@ -100,7 +102,8 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
   }
 
   return (
-    <section className="min-h-[560px] min-w-0 rounded-md border border-border bg-slate-950">
+    <section className="flex min-h-[560px] min-w-0 overflow-hidden rounded-md border border-border bg-slate-950">
+      <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div>
           <h2 className="text-lg font-semibold">{pipeline.name}</h2>
@@ -129,6 +132,7 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
           onConnect={onConnect}
           onEdgesChange={onEdgesChange}
           onNodesChange={onNodesChange}
+          onNodeClick={(_event, node) => setSelectedUnit({ id: node.id, name: String(node.data.label) })}
           onSelectionChange={({ nodes: selected }) => setSelectedNodeIds(selected.map((node: Node) => node.id))}
         >
           <Background />
@@ -138,6 +142,8 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
       <p aria-live="polite" className="min-h-8 border-t border-border px-3 py-2 text-sm text-slate-300">
         {message}
       </p>
+      </div>
+      {selectedUnit ? <CommandPanel unitId={selectedUnit.id} unitName={selectedUnit.name} /> : null}
     </section>
   );
 }
