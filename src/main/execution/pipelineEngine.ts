@@ -21,6 +21,7 @@ export class PipelineEngine {
     private readonly pipelines: PipelineRepository,
     private readonly commands: CommandRepository,
     private readonly localExecutor: LocalCommandExecutor,
+    private readonly remoteExecutor?: LocalCommandExecutor,
   ) {}
 
   async runPipeline(pipelineId: number, emit: (event: ExecutionEvent) => void = () => {}): Promise<RunRecord> {
@@ -83,7 +84,11 @@ export class PipelineEngine {
     let stderr = '';
     emit({ type: 'command-status', runId, commandId: command.id, status: 'pending' });
     emit({ type: 'command-status', runId, commandId: command.id, status: 'running' });
-    const result = await this.localExecutor.execute(command, (streamEvent) => {
+    const executor =
+      command.type === 'shell' && command.config.serverId !== null && this.remoteExecutor
+        ? this.remoteExecutor
+        : this.localExecutor;
+    const result = await executor.execute(command, (streamEvent) => {
       if (streamEvent.type === 'stdout') {
         stdout += streamEvent.data;
       } else {
