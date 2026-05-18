@@ -36,13 +36,15 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
   const [selectedUnit, setSelectedUnit] = useState<{ id: string; name: string } | null>(null);
   const [message, setMessage] = useState('');
   const [parameters, setParameters] = useState<PipelineParameter[]>(pipeline.parameters ?? []);
+  const [shellSessions, setShellSessions] = useState<string[]>(pipeline.shellSessions ?? []);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [commandOutputs, setCommandOutputs] = useState<Record<string, CommandOutput>>({});
 
   useEffect(() => {
     setParameters(pipeline.parameters ?? []);
-  }, [pipeline.id, pipeline.parameters]);
+    setShellSessions(pipeline.shellSessions ?? []);
+  }, [pipeline.id, pipeline.parameters, pipeline.shellSessions]);
 
   useEffect(() => {
     if (!api) {
@@ -155,6 +157,16 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
     setMessage('参数已保存');
   }
 
+  async function saveShellSessions() {
+    if (!api) {
+      setMessage('IPC bridge unavailable');
+      return;
+    }
+    const updated = await api.updateShellSessions(pipeline.id, shellSessions);
+    setShellSessions(updated.shellSessions);
+    setMessage('Shell sessions saved');
+  }
+
   function handleExecutionEvent(event: ExecutionEvent) {
     if (event.type === 'run-status') {
       setActiveRunId(event.runId);
@@ -222,10 +234,51 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
         {message}
       </p>
       <ParameterEditor parameters={parameters} onChange={setParameters} onSave={() => void saveParameters()} />
+      <ShellSessionEditor shellSessions={shellSessions} onChange={setShellSessions} onSave={() => void saveShellSessions()} />
       <RunViewer commandOutputs={commandOutputs} runId={activeRunId} status={runStatus} />
       </div>
-      {selectedUnit ? <CommandPanel unitId={selectedUnit.id} unitName={selectedUnit.name} /> : null}
+      {selectedUnit ? <CommandPanel shellSessions={shellSessions} unitId={selectedUnit.id} unitName={selectedUnit.name} /> : null}
     </section>
+  );
+}
+
+function ShellSessionEditor({
+  onChange,
+  onSave,
+  shellSessions,
+}: {
+  onChange: (shellSessions: string[]) => void;
+  onSave: () => void;
+  shellSessions: string[];
+}) {
+  function update(index: number, value: string) {
+    onChange(shellSessions.map((session, currentIndex) => (currentIndex === index ? value : session)));
+  }
+
+  return (
+    <div className="border-t border-border bg-slate-900 px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-white">Shell Sessions</h3>
+        <div className="flex gap-2">
+          <Button onClick={() => onChange([...shellSessions, `session-${shellSessions.length + 1}`])} type="button" variant="ghost">
+            Add Session
+          </Button>
+          <Button onClick={onSave} type="button" variant="ghost">
+            Save Sessions
+          </Button>
+        </div>
+      </div>
+      <div className="grid gap-2">
+        {shellSessions.map((session, index) => (
+          <div className="grid grid-cols-[1fr_auto] gap-2" key={`${session}-${index}`}>
+            <input className={inputClass} value={session} onChange={(event) => update(index, event.target.value)} />
+            <Button onClick={() => onChange(shellSessions.filter((_, currentIndex) => currentIndex !== index))} type="button" variant="ghost">
+              Delete
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

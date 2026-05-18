@@ -16,6 +16,7 @@ export function migratePipelineSchema(db: Database) {
       folder_id integer references folders(id) on delete set null,
       dag_edges text not null default '[]',
       parameters text not null default '[]',
+      shell_sessions text not null default '[]',
       created_at text not null default current_timestamp,
       updated_at text not null default current_timestamp
     );
@@ -63,6 +64,7 @@ export function migratePipelineSchema(db: Database) {
     );
   `);
   ensureColumn(db, 'pipelines', 'parameters', "text not null default '[]'");
+  ensureColumn(db, 'pipelines', 'shell_sessions', "text not null default '[]'");
 }
 
 function ensureColumn(db: Database, table: string, column: string, definition: string) {

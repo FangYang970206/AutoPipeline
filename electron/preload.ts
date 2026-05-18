@@ -25,6 +25,7 @@ interface AutoPipelineApi {
     getGraph: (pipelineId: number) => Promise<unknown>;
     saveGraph: (pipelineId: number, graph: unknown) => Promise<void>;
     updateParameters: (pipelineId: number, parameters: unknown) => Promise<unknown>;
+    updateShellSessions: (pipelineId: number, shellSessions: unknown) => Promise<unknown>;
   };
   commands: {
     list: (unitId: string) => Promise<unknown>;
@@ -63,6 +64,7 @@ const api: AutoPipelineApi = {
     getGraph: (pipelineId) => ipcRenderer.invoke('pipelines:get-graph', pipelineId),
     saveGraph: (pipelineId, graph) => ipcRenderer.invoke('pipelines:save-graph', pipelineId, graph) as Promise<void>,
     updateParameters: (pipelineId, parameters) => ipcRenderer.invoke('pipelines:update-parameters', pipelineId, parameters),
+    updateShellSessions: (pipelineId, shellSessions) => ipcRenderer.invoke('pipelines:update-shell-sessions', pipelineId, shellSessions),
   },
   commands: {
     list: (unitId) => ipcRenderer.invoke('commands:list', unitId),

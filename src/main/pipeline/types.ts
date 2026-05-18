@@ -12,6 +12,7 @@ export interface PipelineRecord {
   folderId: number | null;
   dagEdges: unknown[];
   parameters: PipelineParameter[];
+  shellSessions: string[];
   createdAt: string;
   updatedAt: string;
 }

@@ -9,6 +9,8 @@ export interface ShellCommandConfig {
   shellType: 'powershell' | 'cmd';
   timeout?: number;
   onFailure: ShellFailureMode;
+  sessionName?: string | null;
+  reuseSession?: boolean;
 }
 
 export interface TransferCommandConfig {

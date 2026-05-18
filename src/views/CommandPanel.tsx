@@ -13,7 +13,7 @@ import type {
   TransferCommandRecord,
 } from '../types';
 
-export function CommandPanel({ unitId, unitName }: { unitId: string; unitName: string }) {
+export function CommandPanel({ shellSessions, unitId, unitName }: { shellSessions: string[]; unitId: string; unitName: string }) {
   const commandApi = window.autoPipeline?.commands;
   const serverApi = window.autoPipeline?.servers;
   const [commands, setCommands] = useState<CommandInput[]>([]);
@@ -45,6 +45,8 @@ export function CommandPanel({ unitId, unitName }: { unitId: string; unitName: s
           serverId: null,
           shellType: 'powershell',
           onFailure: 'stop',
+          sessionName: null,
+          reuseSession: false,
         },
       },
     ]);
@@ -142,6 +144,7 @@ export function CommandPanel({ unitId, unitName }: { unitId: string; unitName: s
                 index={index}
                 onChange={updateCommand}
                 servers={servers}
+                shellSessions={shellSessions}
                 templateSuggestions={templateSuggestions}
               />
             ) : (
@@ -162,12 +165,14 @@ function ShellCommandForm({
   index,
   onChange,
   servers,
+  shellSessions,
   templateSuggestions,
 }: {
   command: Omit<ShellCommandRecord, 'unitId'>;
   index: number;
   onChange: (index: number, next: CommandInput) => void;
   servers: ServerRecord[];
+  shellSessions: string[];
   templateSuggestions: string[];
 }) {
   const update = (config: Partial<ShellCommandConfig>) => onChange(index, { ...command, config: { ...command.config, ...config } });
@@ -192,6 +197,35 @@ function ShellCommandForm({
           <option value="stop">stop</option>
           <option value="continue">continue</option>
           <option value="skip_unit">skip_unit</option>
+        </select>
+      </div>
+      <div className="grid grid-cols-[auto_1fr] items-center gap-2">
+        <label className="flex items-center gap-2 text-slate-200">
+          <input
+            checked={command.config.reuseSession ?? false}
+            onChange={(event) =>
+              update({
+                reuseSession: event.target.checked,
+                sessionName: event.target.checked ? command.config.sessionName ?? shellSessions[0] ?? null : null,
+              })
+            }
+            type="checkbox"
+          />
+          Reuse session
+        </label>
+        <select
+          aria-label="Shell session"
+          className={inputClass}
+          disabled={!command.config.reuseSession || shellSessions.length === 0}
+          value={command.config.sessionName ?? ''}
+          onChange={(event) => update({ sessionName: event.target.value || null })}
+        >
+          <option value="">No session</option>
+          {shellSessions.map((session) => (
+            <option key={session} value={session}>
+              {session}
+            </option>
+          ))}
         </select>
       </div>
       <Editor

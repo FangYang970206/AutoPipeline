@@ -29,6 +29,10 @@ export class CommandRepository {
               : [];
           });
     if (unit) {
+      validateShellSessions(
+        commands,
+        this.buildShellSessionValidationInput(unit.pipeline_id, unitId, commands),
+      );
       const errors = validateTemplateReferences(
         this.buildTemplateValidationInput(unit.pipeline_id, unitId, commands, commandRenames),
       );
@@ -140,6 +144,64 @@ export class CommandRepository {
         ? (JSON.parse(pipeline.parameters) as Array<{ name: string }>).map((parameter) => parameter.name)
         : [],
     };
+  }
+
+  private buildShellSessionValidationInput(pipelineId: number, unitId: string, nextCommands: CommandInput[]) {
+    const pipeline = this.db.prepare('select shell_sessions from pipelines where id = ?').get(pipelineId) as
+      | { shell_sessions: string }
+      | undefined;
+    const commandRows = this.db
+      .prepare(
+        `select commands.*
+           from commands
+           join execution_units on execution_units.id = commands.unit_id
+          where execution_units.pipeline_id = ?
+          order by execution_units.rowid, commands.command_order`,
+      )
+      .all(pipelineId) as CommandRow[];
+    const allCommands: CommandInput[] = [];
+    for (const row of commandRows) {
+      const { unitId: rowUnitId, ...command } = mapCommand(row);
+      if (rowUnitId !== unitId) {
+        allCommands.push(command);
+      }
+    }
+    allCommands.push(...nextCommands);
+    return {
+      allCommands,
+      shellSessions: pipeline ? (JSON.parse(pipeline.shell_sessions) as string[]) : [],
+    };
+  }
+}
+
+function validateShellSessions(
+  commands: CommandInput[],
+  context: { allCommands: CommandInput[]; shellSessions: string[] },
+) {
+  const definedSessions = new Set(context.shellSessions);
+  for (const command of commands) {
+    if (command.type !== 'shell' || !command.config.reuseSession) {
+      continue;
+    }
+    if (!command.config.sessionName) {
+      throw new Error('Shell session name is required when reuseSession is enabled');
+    }
+    if (!definedSessions.has(command.config.sessionName)) {
+      throw new Error(`Unknown shell session: ${command.config.sessionName}`);
+    }
+  }
+
+  const targets = new Map<string, string>();
+  for (const command of context.allCommands) {
+    if (command.type !== 'shell' || !command.config.reuseSession || !command.config.sessionName) {
+      continue;
+    }
+    const target = `${command.config.serverId ?? 'local'}:${command.config.shellType}`;
+    const previousTarget = targets.get(command.config.sessionName);
+    if (previousTarget && previousTarget !== target) {
+      throw new Error(`Shell session ${command.config.sessionName} is used with incompatible targets`);
+    }
+    targets.set(command.config.sessionName, target);
   }
 }
 

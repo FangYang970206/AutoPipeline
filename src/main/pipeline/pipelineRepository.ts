@@ -16,6 +16,7 @@ interface PipelineRow {
   folder_id: number | null;
   dag_edges: string;
   parameters: string;
+  shell_sessions: string;
   created_at: string;
   updated_at: string;
 }
@@ -56,6 +57,20 @@ export class PipelineRepository {
     this.db
       .prepare('update pipelines set parameters = ?, updated_at = current_timestamp where id = ?')
       .run(JSON.stringify(parameters), id);
+    return this.getPipeline(id);
+  }
+
+  updateShellSessions(id: number, shellSessions: string[]): PipelineRecord {
+    const names = validateShellSessions(shellSessions);
+    const removed = this.getPipeline(id).shellSessions.filter((session) => !names.includes(session));
+    for (const session of removed) {
+      if (this.isShellSessionReferenced(id, session)) {
+        throw new Error(`Shell session is still referenced: ${session}`);
+      }
+    }
+    this.db
+      .prepare('update pipelines set shell_sessions = ?, updated_at = current_timestamp where id = ?')
+      .run(JSON.stringify(names), id);
     return this.getPipeline(id);
   }
 
@@ -198,6 +213,21 @@ export class PipelineRepository {
 
     return includeEmpty ? roots : roots.filter((folder) => folder.pipelines.length > 0 || folder.folders.length > 0);
   }
+
+  private isShellSessionReferenced(pipelineId: number, sessionName: string) {
+    const rows = this.db
+      .prepare(
+        `select commands.config
+           from commands
+           join execution_units on execution_units.id = commands.unit_id
+          where execution_units.pipeline_id = ? and commands.type = 'shell'`,
+      )
+      .all(pipelineId) as Array<{ config: string }>;
+    return rows.some((row) => {
+      const config = JSON.parse(row.config) as { reuseSession?: boolean; sessionName?: string | null };
+      return config.reuseSession === true && config.sessionName === sessionName;
+    });
+  }
 }
 
 function requireName(name: string) {
@@ -225,6 +255,7 @@ function mapPipeline(row: PipelineRow): PipelineRecord {
     folderId: row.folder_id,
     dagEdges: JSON.parse(row.dag_edges) as unknown[],
     parameters: JSON.parse(row.parameters ?? '[]') as PipelineParameter[],
+    shellSessions: JSON.parse(row.shell_sessions ?? '[]') as string[],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -245,4 +276,19 @@ function validateParameters(parameters: PipelineParameter[]) {
       throw new Error(`Select parameter requires options: ${name}`);
     }
   }
+}
+
+function validateShellSessions(shellSessions: string[]) {
+  const names = new Set<string>();
+  return shellSessions.map((session) => {
+    const name = session.trim();
+    if (!name) {
+      throw new Error('Shell session name is required');
+    }
+    if (names.has(name)) {
+      throw new Error(`Duplicate shell session: ${name}`);
+    }
+    names.add(name);
+    return name;
+  });
 }

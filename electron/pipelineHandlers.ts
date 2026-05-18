@@ -26,4 +26,7 @@ export function registerPipelineHandlers() {
   ipcMain.handle('pipelines:update-parameters', (_event, id: number, parameters: PipelineParameter[]) =>
     repository.updateParameters(id, parameters),
   );
+  ipcMain.handle('pipelines:update-shell-sessions', (_event, id: number, shellSessions: string[]) =>
+    repository.updateShellSessions(id, shellSessions),
+  );
 }
