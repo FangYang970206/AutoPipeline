@@ -45,43 +45,36 @@ export class PipelineEngine {
     try {
       const graph = this.pipelines.getPipelineGraph(pipelineId);
       const unitNames = new Map(graph.units.map((unit) => [unit.id, unit.name]));
-      const orderedUnits = topologicalOrder(
-        graph.units.map((unit) => unit.id),
-        graph.edges,
-      );
+      const schedule = buildSchedule(graph.units.map((unit) => unit.id), graph.edges);
       let outputContext: OutputContext = {};
       let runStatus: RunStatus = 'succeeded';
+      const unitStatuses = new Map<string, UnitExecutionStatus>();
 
-      for (const unitId of orderedUnits) {
-        const unitCommands = this.commands.listCommands(unitId);
-        let skipRestOfUnit = false;
-        for (const command of unitCommands) {
-          if (skipRestOfUnit) {
-            this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
-            emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
-            continue;
-          }
+      const runningUnits = new Map<string, Promise<UnitExecutionResult>>();
+      const startUnit = (unitId: string) => {
+        const inputContext = outputContext;
+        const runUnit = hasFailedPredecessor(unitId, schedule.predecessors, unitStatuses)
+          ? Promise.resolve(this.skipUnit(runId, unitId, emit))
+          : this.executeUnit(runId, unitId, unitNames.get(unitId) ?? unitId, inputContext, parameters, emit);
+        runningUnits.set(unitId, runUnit);
+      };
 
-          const result = await this.executeCommand(
-            runId,
-            command,
-            outputContext,
-            parameters,
-            emit,
-          );
-          outputContext = storeOutputs(outputContext, unitNames.get(unitId) ?? unitId, command.config.name, result.outputs);
-          if (result.exitCode !== 0) {
-            const onFailure = command.type === 'shell' ? command.config.onFailure : 'stop';
-            if (onFailure === 'stop') {
-              runStatus = 'failed';
-              this.skipNotStarted(runId, orderedUnits, unitId, command.id, emit);
-              this.finishRun(runId, runStatus, started);
-              emit({ type: 'run-status', runId, status: runStatus });
-              return { id: runId, pipelineId, status: runStatus };
-            }
-            if (onFailure === 'skip_unit') {
-              skipRestOfUnit = true;
-            }
+      for (const unitId of schedule.ready) {
+        startUnit(unitId);
+      }
+
+      while (runningUnits.size > 0) {
+        const result = await Promise.race(runningUnits.values());
+        runningUnits.delete(result.unitId);
+        unitStatuses.set(result.unitId, result.status);
+        outputContext = mergeOutputContext(outputContext, result.outputs);
+        if (result.status === 'failed' || result.status === 'skipped') {
+          runStatus = 'failed';
+        }
+        for (const nextUnit of schedule.successors.get(result.unitId) ?? []) {
+          schedule.remainingPredecessors.set(nextUnit, schedule.remainingPredecessors.get(nextUnit)! - 1);
+          if (schedule.remainingPredecessors.get(nextUnit) === 0) {
+            startUnit(nextUnit);
           }
         }
       }
@@ -92,6 +85,47 @@ export class PipelineEngine {
     } finally {
       this.runningPipelineIds.delete(pipelineId);
     }
+  }
+
+  private async executeUnit(
+    runId: number,
+    unitId: string,
+    unitName: string,
+    inputContext: OutputContext,
+    parameters: Record<string, unknown>,
+    emit: (event: ExecutionEvent) => void,
+  ): Promise<UnitExecutionResult> {
+    const unitCommands = this.commands.listCommands(unitId);
+    let outputContext: OutputContext = {};
+    let skipRestOfUnit = false;
+    for (const command of unitCommands) {
+      if (skipRestOfUnit) {
+        this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
+        emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
+        continue;
+      }
+
+      const result = await this.executeCommand(
+        runId,
+        command,
+        mergeOutputContext(inputContext, outputContext),
+        parameters,
+        emit,
+      );
+      outputContext = storeOutputs(outputContext, unitName, command.config.name, result.outputs);
+      if (result.exitCode !== 0) {
+        const onFailure = command.type === 'shell' ? command.config.onFailure : 'stop';
+        if (onFailure === 'stop') {
+          this.skipRemainingCommands(runId, unitCommands, command.id, emit);
+          return { unitId, status: 'failed', outputs: outputContext };
+        }
+        if (onFailure === 'skip_unit') {
+          skipRestOfUnit = true;
+        }
+      }
+    }
+
+    return { unitId, status: 'succeeded', outputs: outputContext };
   }
 
   private async executeCommand(
@@ -190,38 +224,40 @@ export class PipelineEngine {
       );
   }
 
-  private skipNotStarted(
+  private skipRemainingCommands(
     runId: number,
-    orderedUnits: string[],
-    currentUnitId: string,
+    unitCommands: CommandRecord[],
     failedCommandId: string,
     emit: (event: ExecutionEvent) => void,
   ) {
     let afterFailedCommand = false;
-    let afterCurrentUnit = false;
-    for (const unitId of orderedUnits) {
-      if (unitId === currentUnitId) {
-        for (const command of this.commands.listCommands(unitId)) {
-          if (command.id === failedCommandId) {
-            afterFailedCommand = true;
-            continue;
-          }
-          if (afterFailedCommand) {
-            this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
-            emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
-          }
-        }
-        afterCurrentUnit = true;
+    for (const command of unitCommands) {
+      if (command.id === failedCommandId) {
+        afterFailedCommand = true;
         continue;
       }
-      if (afterCurrentUnit) {
-        for (const command of this.commands.listCommands(unitId)) {
-          this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
-          emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
-        }
+      if (afterFailedCommand) {
+        this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
+        emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
       }
     }
   }
+
+  private skipUnit(runId: number, unitId: string, emit: (event: ExecutionEvent) => void): UnitExecutionResult {
+    for (const command of this.commands.listCommands(unitId)) {
+      this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
+      emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
+    }
+    return { unitId, status: 'skipped', outputs: {} };
+  }
+}
+
+type UnitExecutionStatus = 'succeeded' | 'failed' | 'skipped';
+
+interface UnitExecutionResult {
+  unitId: string;
+  status: UnitExecutionStatus;
+  outputs: OutputContext;
 }
 
 function prepareCommand(command: CommandRecord, context: OutputContext, parameters: Record<string, unknown>): CommandRecord {
@@ -237,26 +273,39 @@ function prepareCommand(command: CommandRecord, context: OutputContext, paramete
   };
 }
 
-function topologicalOrder(nodes: string[], edges: Array<{ source: string; target: string }>) {
-  const incoming = new Map(nodes.map((node) => [node, 0]));
-  const outgoing = new Map(nodes.map((node) => [node, [] as string[]]));
+function buildSchedule(nodes: string[], edges: Array<{ source: string; target: string }>) {
+  const remainingPredecessors = new Map(nodes.map((node) => [node, 0]));
+  const predecessors = new Map(nodes.map((node) => [node, [] as string[]]));
+  const successors = new Map(nodes.map((node) => [node, [] as string[]]));
   for (const edge of edges) {
-    incoming.set(edge.target, (incoming.get(edge.target) ?? 0) + 1);
-    outgoing.get(edge.source)?.push(edge.target);
+    remainingPredecessors.set(edge.target, (remainingPredecessors.get(edge.target) ?? 0) + 1);
+    predecessors.get(edge.target)?.push(edge.source);
+    successors.get(edge.source)?.push(edge.target);
   }
 
-  const queue = nodes.filter((node) => (incoming.get(node) ?? 0) === 0);
-  const ordered: string[] = [];
-  while (queue.length > 0) {
-    const node = queue.shift()!;
-    ordered.push(node);
-    for (const next of outgoing.get(node) ?? []) {
-      incoming.set(next, incoming.get(next)! - 1);
-      if (incoming.get(next) === 0) {
-        queue.push(next);
-      }
-    }
-  }
+  return {
+    predecessors,
+    ready: nodes.filter((node) => (remainingPredecessors.get(node) ?? 0) === 0),
+    remainingPredecessors,
+    successors,
+  };
+}
 
-  return ordered;
+function hasFailedPredecessor(
+  unitId: string,
+  predecessors: Map<string, string[]>,
+  unitStatuses: Map<string, UnitExecutionStatus>,
+) {
+  return (predecessors.get(unitId) ?? []).some((predecessor) => {
+    const status = unitStatuses.get(predecessor);
+    return status === 'failed' || status === 'skipped';
+  });
+}
+
+function mergeOutputContext(left: OutputContext, right: OutputContext): OutputContext {
+  const merged: OutputContext = { ...left };
+  for (const [unitName, commands] of Object.entries(right)) {
+    merged[unitName] = { ...(merged[unitName] ?? {}), ...commands };
+  }
+  return merged;
 }
