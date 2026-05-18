@@ -279,4 +279,273 @@ describe('PipelineEngine', () => {
 
     expect(executedScripts).toEqual(['deploy prod']);
   });
+
+  it('runs forked branches in parallel and waits for both before a join unit', async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    const releases = new Map<string, () => void>();
+    let resolveBranchesStarted!: () => void;
+    const branchesStarted = new Promise<void>((resolve) => {
+      resolveBranchesStarted = resolve;
+    });
+    const { commands, db, engine, pipeline, pipelines } = setup({
+      execute: async (command) => {
+        started.push(command.config.name);
+        if (command.config.name === 'Branch A' || command.config.name === 'Branch B') {
+          if (started.includes('Branch A') && started.includes('Branch B')) {
+            resolveBranchesStarted();
+          }
+          await new Promise<void>((resolve) => releases.set(command.config.name, resolve));
+        }
+        finished.push(command.config.name);
+        return { exitCode: 0 };
+      },
+    });
+    pipelines.savePipelineGraph(pipeline.id, {
+      units: [
+        { id: 'unit-a', name: 'Start', position: { x: 0, y: 0 } },
+        { id: 'unit-b', name: 'Left', position: { x: 200, y: -80 } },
+        { id: 'unit-c', name: 'Right', position: { x: 200, y: 80 } },
+        { id: 'unit-d', name: 'Join', position: { x: 400, y: 0 } },
+      ],
+      edges: [
+        { source: 'unit-a', target: 'unit-b' },
+        { source: 'unit-a', target: 'unit-c' },
+        { source: 'unit-b', target: 'unit-d' },
+        { source: 'unit-c', target: 'unit-d' },
+      ],
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-start', type: 'shell', order: 0, config: { name: 'Start', script: 'start', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-b', [
+      { id: 'cmd-branch-a', type: 'shell', order: 0, config: { name: 'Branch A', script: 'a', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-c', [
+      { id: 'cmd-branch-b', type: 'shell', order: 0, config: { name: 'Branch B', script: 'b', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-d', [
+      { id: 'cmd-join', type: 'shell', order: 0, config: { name: 'Join', script: 'join', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    const run = engine.runPipeline(pipeline.id);
+    await branchesStarted;
+
+    expect(finished).toEqual(['Start']);
+    releases.get('Branch A')?.();
+    releases.get('Branch B')?.();
+
+    await expect(run).resolves.toMatchObject({ status: 'succeeded' });
+    expect(started).toEqual(['Start', 'Branch A', 'Branch B', 'Join']);
+    expect(db.prepare('select command_name, status from command_results order by id').all()).toEqual([
+      { command_name: 'Start', status: 'succeeded' },
+      { command_name: 'Branch A', status: 'succeeded' },
+      { command_name: 'Branch B', status: 'succeeded' },
+      { command_name: 'Join', status: 'succeeded' },
+    ]);
+  });
+
+  it('lets sibling branches finish and skips join units after a branch failure', async () => {
+    const executed: string[] = [];
+    const { commands, db, engine, pipeline, pipelines } = setup({
+      execute: async (command) => {
+        executed.push(command.config.name);
+        return { exitCode: command.config.name === 'Branch A' ? 1 : 0 };
+      },
+    });
+    pipelines.savePipelineGraph(pipeline.id, {
+      units: [
+        { id: 'unit-a', name: 'Start', position: { x: 0, y: 0 } },
+        { id: 'unit-b', name: 'Left', position: { x: 200, y: -80 } },
+        { id: 'unit-c', name: 'Right', position: { x: 200, y: 80 } },
+        { id: 'unit-d', name: 'Join', position: { x: 400, y: 0 } },
+      ],
+      edges: [
+        { source: 'unit-a', target: 'unit-b' },
+        { source: 'unit-a', target: 'unit-c' },
+        { source: 'unit-b', target: 'unit-d' },
+        { source: 'unit-c', target: 'unit-d' },
+      ],
+    });
+    for (const [unitId, name] of [
+      ['unit-a', 'Start'],
+      ['unit-b', 'Branch A'],
+      ['unit-c', 'Branch B'],
+      ['unit-d', 'Join'],
+    ] as const) {
+      commands.saveCommands(unitId, [
+        { id: `cmd-${unitId}`, type: 'shell', order: 0, config: { name, script: name, serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+      ]);
+    }
+
+    await expect(engine.runPipeline(pipeline.id)).resolves.toMatchObject({ status: 'failed' });
+
+    expect(executed).toEqual(['Start', 'Branch A', 'Branch B']);
+    expect(db.prepare('select command_name, status from command_results order by id').all()).toEqual([
+      { command_name: 'Start', status: 'succeeded' },
+      { command_name: 'Branch A', status: 'failed' },
+      { command_name: 'Branch B', status: 'succeeded' },
+      { command_name: 'Join', status: 'skipped' },
+    ]);
+  });
+
+  it('lets all sibling branches finish and skips join units after multiple branch failures', async () => {
+    const executed: string[] = [];
+    const { commands, db, engine, pipeline, pipelines } = setup({
+      execute: async (command) => {
+        executed.push(command.config.name);
+        return { exitCode: command.config.name.startsWith('Branch') ? 1 : 0 };
+      },
+    });
+    pipelines.savePipelineGraph(pipeline.id, {
+      units: [
+        { id: 'unit-a', name: 'Start', position: { x: 0, y: 0 } },
+        { id: 'unit-b', name: 'Left', position: { x: 200, y: -80 } },
+        { id: 'unit-c', name: 'Right', position: { x: 200, y: 80 } },
+        { id: 'unit-d', name: 'Join', position: { x: 400, y: 0 } },
+      ],
+      edges: [
+        { source: 'unit-a', target: 'unit-b' },
+        { source: 'unit-a', target: 'unit-c' },
+        { source: 'unit-b', target: 'unit-d' },
+        { source: 'unit-c', target: 'unit-d' },
+      ],
+    });
+    for (const [unitId, name] of [
+      ['unit-a', 'Start'],
+      ['unit-b', 'Branch A'],
+      ['unit-c', 'Branch B'],
+      ['unit-d', 'Join'],
+    ] as const) {
+      commands.saveCommands(unitId, [
+        { id: `cmd-${unitId}`, type: 'shell', order: 0, config: { name, script: name, serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+      ]);
+    }
+
+    await expect(engine.runPipeline(pipeline.id)).resolves.toMatchObject({ status: 'failed' });
+
+    expect(executed).toEqual(['Start', 'Branch A', 'Branch B']);
+    expect(db.prepare('select command_name, status from command_results order by id').all()).toEqual([
+      { command_name: 'Start', status: 'succeeded' },
+      { command_name: 'Branch A', status: 'failed' },
+      { command_name: 'Branch B', status: 'failed' },
+      { command_name: 'Join', status: 'skipped' },
+    ]);
+  });
+
+  it('starts a ready descendant before unrelated long-running sibling branches finish', async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseLongBranch!: () => void;
+    let resolveDescendantStarted!: () => void;
+    const descendantStarted = new Promise<void>((resolve) => {
+      resolveDescendantStarted = resolve;
+    });
+    const { commands, engine, pipeline, pipelines } = setup({
+      execute: async (command) => {
+        started.push(command.config.name);
+        if (command.config.name === 'Long Branch') {
+          await new Promise<void>((resolve) => {
+            releaseLongBranch = resolve;
+          });
+        }
+        if (command.config.name === 'Short Child') {
+          resolveDescendantStarted();
+        }
+        finished.push(command.config.name);
+        return { exitCode: 0 };
+      },
+    });
+    pipelines.savePipelineGraph(pipeline.id, {
+      units: [
+        { id: 'unit-a', name: 'Start', position: { x: 0, y: 0 } },
+        { id: 'unit-b', name: 'Long', position: { x: 200, y: -80 } },
+        { id: 'unit-c', name: 'Short', position: { x: 200, y: 80 } },
+        { id: 'unit-d', name: 'Short Child', position: { x: 400, y: 80 } },
+      ],
+      edges: [
+        { source: 'unit-a', target: 'unit-b' },
+        { source: 'unit-a', target: 'unit-c' },
+        { source: 'unit-c', target: 'unit-d' },
+      ],
+    });
+    for (const [unitId, name] of [
+      ['unit-a', 'Start'],
+      ['unit-b', 'Long Branch'],
+      ['unit-c', 'Short Branch'],
+      ['unit-d', 'Short Child'],
+    ] as const) {
+      commands.saveCommands(unitId, [
+        { id: `cmd-${unitId}`, type: 'shell', order: 0, config: { name, script: name, serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+      ]);
+    }
+
+    const run = engine.runPipeline(pipeline.id);
+    await descendantStarted;
+
+    expect(started).toEqual(['Start', 'Long Branch', 'Short Branch', 'Short Child']);
+    expect(finished).toEqual(['Start', 'Short Branch', 'Short Child']);
+    releaseLongBranch();
+    await expect(run).resolves.toMatchObject({ status: 'succeeded' });
+  });
+
+  it('makes parallel branch outputs available to a join unit', async () => {
+    const executedScripts: string[] = [];
+    const { commands, engine, pipeline, pipelines } = setup({
+      execute: async (command, emit) => {
+        if (command.type !== 'shell') {
+          throw new Error('Expected shell command');
+        }
+        executedScripts.push(command.config.script);
+        if (command.config.name === 'Emit Left') {
+          emit({ type: 'stdout', data: '::set-output name=left::L\n' });
+        }
+        if (command.config.name === 'Emit Right') {
+          emit({ type: 'stdout', data: '::set-output name=right::R\n' });
+        }
+        return { exitCode: 0 };
+      },
+    });
+    pipelines.savePipelineGraph(pipeline.id, {
+      units: [
+        { id: 'unit-a', name: 'Start', position: { x: 0, y: 0 } },
+        { id: 'unit-b', name: 'Left', position: { x: 200, y: -80 } },
+        { id: 'unit-c', name: 'Right', position: { x: 200, y: 80 } },
+        { id: 'unit-d', name: 'Join', position: { x: 400, y: 0 } },
+      ],
+      edges: [
+        { source: 'unit-a', target: 'unit-b' },
+        { source: 'unit-a', target: 'unit-c' },
+        { source: 'unit-b', target: 'unit-d' },
+        { source: 'unit-c', target: 'unit-d' },
+      ],
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-start', type: 'shell', order: 0, config: { name: 'Start', script: 'start', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-b', [
+      { id: 'cmd-left', type: 'shell', order: 0, config: { name: 'Emit Left', script: '::set-output name=left::L', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-c', [
+      { id: 'cmd-right', type: 'shell', order: 0, config: { name: 'Emit Right', script: '::set-output name=right::R', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-d', [
+      {
+        id: 'cmd-join',
+        type: 'shell',
+        order: 0,
+        config: {
+          name: 'Join',
+          script: 'join {{Left.Emit Left.left}} {{Right.Emit Right.right}}',
+          serverId: null,
+          shellType: 'cmd',
+          onFailure: 'stop',
+        },
+      },
+    ]);
+
+    await expect(engine.runPipeline(pipeline.id)).resolves.toMatchObject({ status: 'succeeded' });
+
+    expect(executedScripts).toEqual(['start', '::set-output name=left::L', '::set-output name=right::R', 'join L R']);
+  });
 });
