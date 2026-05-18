@@ -95,6 +95,23 @@ describe('PipelineRepository', () => {
     ]);
   });
 
+  it('stores named shell session definitions for a pipeline', () => {
+    const { db, repository } = createRepository();
+    const pipeline = repository.createPipeline({ name: 'Deploy API', folderId: null });
+
+    const updated = repository.updateShellSessions(pipeline.id, [' deploy ', 'diagnostics']);
+
+    expect(updated.shellSessions).toEqual(['deploy', 'diagnostics']);
+    expect(() => repository.updateShellSessions(pipeline.id, ['deploy', 'deploy'])).toThrow('Duplicate shell session: deploy');
+    db.exec(`insert into execution_units (id, pipeline_id, name, position) values ('unit-a', ${pipeline.id}, 'Build', '{}')`);
+    const commands = new CommandRepository(db);
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop', sessionName: 'deploy', reuseSession: true } },
+    ]);
+
+    expect(() => repository.updateShellSessions(pipeline.id, ['diagnostics'])).toThrow('Shell session is still referenced: deploy');
+  });
+
   it('preserves commands and updates template references when an execution unit is renamed', () => {
     const { db, repository } = createRepository();
     const pipeline = repository.createPipeline({ name: 'Deploy API', folderId: null });

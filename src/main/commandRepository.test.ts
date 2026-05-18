@@ -10,6 +10,7 @@ function createRepository() {
   migratePipelineSchema(db);
   const pipelines = new PipelineRepository(db);
   const pipeline = pipelines.createPipeline({ name: 'Deploy API', folderId: null });
+  pipelines.updateShellSessions(pipeline.id, ['deploy']);
   pipelines.savePipelineGraph(pipeline.id, {
     units: [{ id: 'unit-a', name: 'Build', position: { x: 0, y: 0 } }],
     edges: [],
@@ -30,7 +31,7 @@ function createPipelineWithCommands() {
     ],
     edges: [{ source: 'unit-a', target: 'unit-b' }],
   });
-  return { commands: new CommandRepository(db), pipelines };
+  return { commands: new CommandRepository(db), pipeline, pipelines };
 }
 
 describe('CommandRepository', () => {
@@ -49,6 +50,8 @@ describe('CommandRepository', () => {
           shellType: 'powershell',
           timeout: 60,
           onFailure: 'stop',
+          sessionName: 'deploy',
+          reuseSession: true,
         },
       },
       {
@@ -67,7 +70,12 @@ describe('CommandRepository', () => {
     ]);
 
     expect(repository.listCommands('unit-a')).toEqual([
-      expect.objectContaining({ id: 'cmd-1', type: 'shell', order: 0 }),
+      expect.objectContaining({
+        id: 'cmd-1',
+        type: 'shell',
+        order: 0,
+        config: expect.objectContaining({ sessionName: 'deploy', reuseSession: true }),
+      }),
       expect.objectContaining({ id: 'cmd-2', type: 'transfer', order: 1 }),
     ]);
   });
@@ -114,5 +122,27 @@ describe('CommandRepository', () => {
         { id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy {{Deploy.Image.tag}} {{Build.Image.missing}}', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
       ]),
     ).toThrow('Unknown template command: Deploy.Image; Unknown template output: {{Build.Image.missing}}');
+  });
+
+  it('validates shell session references and target consistency', () => {
+    const { commands, pipeline, pipelines } = createPipelineWithCommands();
+    pipelines.updateShellSessions(pipeline.id, ['deploy']);
+
+    expect(() =>
+      commands.saveCommands('unit-a', [
+        { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop', reuseSession: true } },
+      ]),
+    ).toThrow('Shell session name is required when reuseSession is enabled');
+    expect(() =>
+      commands.saveCommands('unit-a', [
+        { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop', sessionName: 'missing', reuseSession: true } },
+      ]),
+    ).toThrow('Unknown shell session: missing');
+    expect(() =>
+      commands.saveCommands('unit-a', [
+        { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop', sessionName: 'deploy', reuseSession: true } },
+        { id: 'cmd-test', type: 'shell', order: 1, config: { name: 'Test', script: 'test', serverId: null, shellType: 'powershell', onFailure: 'stop', sessionName: 'deploy', reuseSession: true } },
+      ]),
+    ).toThrow('Shell session deploy is used with incompatible targets');
   });
 });

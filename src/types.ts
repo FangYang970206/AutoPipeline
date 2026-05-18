@@ -25,6 +25,7 @@ export interface AutoPipelineApi {
     getGraph: (pipelineId: number) => Promise<PipelineGraph>;
     saveGraph: (pipelineId: number, graph: PipelineGraph) => Promise<void>;
     updateParameters: (pipelineId: number, parameters: PipelineParameter[]) => Promise<PipelineRecord>;
+    updateShellSessions: (pipelineId: number, shellSessions: string[]) => Promise<PipelineRecord>;
   };
   commands: {
     list: (unitId: string) => Promise<CommandRecord[]>;
@@ -87,6 +88,7 @@ export interface PipelineRecord {
   folderId: number | null;
   dagEdges: unknown[];
   parameters: PipelineParameter[];
+  shellSessions: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -126,6 +128,8 @@ export interface ShellCommandConfig {
   shellType: 'powershell' | 'cmd';
   timeout?: number;
   onFailure: ShellFailureMode;
+  sessionName?: string | null;
+  reuseSession?: boolean;
 }
 
 export interface TransferCommandConfig {

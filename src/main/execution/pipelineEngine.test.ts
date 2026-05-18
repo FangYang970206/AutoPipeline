@@ -433,6 +433,64 @@ describe('PipelineEngine', () => {
     ]);
   });
 
+  it('routes reusable shell commands through a named run session and closes sessions after the run', async () => {
+    const sessionExecutions: Array<{ runId: number; sessionName: string; commandName: string }> = [];
+    const closedRuns: number[] = [];
+    const { commands, engine, pipeline, pipelines } = setup({
+      execute: async () => {
+        throw new Error('Expected session execution');
+      },
+      executeInSession: async (runId, sessionName, command) => {
+        sessionExecutions.push({ runId, sessionName, commandName: command.config.name });
+        return { exitCode: 0 };
+      },
+      closeSessions: async (runId) => {
+        closedRuns.push(runId);
+      },
+    });
+    pipelines.updateShellSessions(pipeline.id, ['deploy']);
+    commands.saveCommands('unit-a', [
+      {
+        id: 'cmd-enter',
+        type: 'shell',
+        order: 0,
+        config: {
+          name: 'Enter directory',
+          script: 'cd app',
+          serverId: null,
+          shellType: 'cmd',
+          onFailure: 'stop',
+          sessionName: 'deploy',
+          reuseSession: true,
+        },
+      },
+    ]);
+    commands.saveCommands('unit-b', [
+      {
+        id: 'cmd-build',
+        type: 'shell',
+        order: 0,
+        config: {
+          name: 'Build',
+          script: 'npm run build',
+          serverId: null,
+          shellType: 'cmd',
+          onFailure: 'stop',
+          sessionName: 'deploy',
+          reuseSession: true,
+        },
+      },
+    ]);
+
+    const run = await engine.runPipeline(pipeline.id);
+
+    expect(sessionExecutions).toEqual([
+      { runId: run.id, sessionName: 'deploy', commandName: 'Enter directory' },
+      { runId: run.id, sessionName: 'deploy', commandName: 'Build' },
+    ]);
+    expect(closedRuns).toEqual([run.id]);
+  });
+
   it('starts a ready descendant before unrelated long-running sibling branches finish', async () => {
     const started: string[] = [];
     const finished: string[] = [];
