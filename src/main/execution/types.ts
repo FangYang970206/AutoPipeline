@@ -23,4 +23,11 @@ export interface LocalCommandExecutor {
     command: CommandRecord,
     emit: (event: Omit<Extract<ExecutionEvent, { type: 'stdout' | 'stderr' }>, 'runId' | 'commandId'>) => void,
   ) => Promise<CommandExecutionResult>;
+  executeInSession?: (
+    runId: number,
+    sessionName: string,
+    command: CommandRecord,
+    emit: (event: Omit<Extract<ExecutionEvent, { type: 'stdout' | 'stderr' }>, 'runId' | 'commandId'>) => void,
+  ) => Promise<CommandExecutionResult>;
+  closeSessions?: (runId: number) => Promise<void>;
 }

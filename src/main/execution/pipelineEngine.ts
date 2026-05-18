@@ -83,6 +83,7 @@ export class PipelineEngine {
       emit({ type: 'run-status', runId, status: runStatus });
       return { id: runId, pipelineId, status: runStatus };
     } finally {
+      await Promise.allSettled([this.localExecutor.closeSessions?.(runId), this.remoteExecutor?.closeSessions?.(runId)]);
       this.runningPipelineIds.delete(pipelineId);
     }
   }
@@ -154,15 +155,28 @@ export class PipelineEngine {
       command.type === 'shell' && command.config.serverId !== null && this.remoteExecutor
         ? this.remoteExecutor
         : this.localExecutor;
-    const result = await executor
-      .execute(command, (streamEvent) => {
-        if (streamEvent.type === 'stdout') {
-          stdout += streamEvent.data;
-        } else {
-          stderr += streamEvent.data;
-        }
-        emit({ ...streamEvent, runId, commandId: command.id });
-      })
+    const execute =
+      command.type === 'shell' && command.config.reuseSession && command.config.sessionName
+        ? (emitOutput: Parameters<LocalCommandExecutor['execute']>[1]) =>
+            executor.executeInSession
+              ? executor.executeInSession(runId, command.config.sessionName!, command, emitOutput)
+              : executor.execute(command, emitOutput)
+        : command.type === 'shell' && command.config.reuseSession
+          ? () => {
+              throw new Error('Shell session name is required when reuseSession is enabled');
+            }
+        : (emitOutput: Parameters<LocalCommandExecutor['execute']>[1]) => executor.execute(command, emitOutput);
+    const result = await Promise.resolve()
+      .then(() =>
+        execute((streamEvent) => {
+          if (streamEvent.type === 'stdout') {
+            stdout += streamEvent.data;
+          } else {
+            stderr += streamEvent.data;
+          }
+          emit({ ...streamEvent, runId, commandId: command.id });
+        }),
+      )
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : 'Command execution failed';
         stderr += message;
