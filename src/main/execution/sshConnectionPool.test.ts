@@ -61,6 +61,23 @@ describe('SshConnectionPool', () => {
 
     expect(client.endCount).toBe(1);
   });
+
+  it('applies updated pool settings to connection limits and idle timers', async () => {
+    const credentials = new InMemoryCredentialStore();
+    await credentials.setPassword(1, 'secret');
+    await credentials.setPassword(2, 'secret');
+    const client = new FakeClient();
+    const pool = new SshConnectionPool(credentials, { idleTimeoutMs: 1000, maxConnections: 2 }, () => client as never);
+
+    await pool.acquire(server({ id: 1, host: 'one.example.com' }));
+    pool.updateOptions({ idleTimeoutMs: 10, maxConnections: 1 });
+
+    await expect(pool.acquire(server({ id: 2, host: 'two.example.com' }))).rejects.toThrow(
+      'SSH connection pool limit reached',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(client.endCount).toBe(1);
+  });
 });
 
 function server(overrides: Partial<ServerRecord>): ServerRecord {

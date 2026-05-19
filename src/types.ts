@@ -42,14 +42,32 @@ export interface AutoPipelineApi {
     onEvent: (callback: (event: ExecutionEvent) => void) => () => void;
   };
   settings: {
+    get: () => Promise<AppSettings>;
+    update: (settings: AppSettings) => Promise<AppSettings>;
     getRetention: () => Promise<RunRetentionSettings>;
     updateRetention: (settings: RunRetentionSettings) => Promise<RunRetentionSettings>;
+  };
+  notifications: {
+    onRunCompleted: (callback: (notification: RunCompletionNotification) => void) => () => void;
   };
 }
 
 export interface RunRetentionSettings {
   maxDays: number;
   maxCount: number;
+}
+
+export interface AppSettings {
+  connectionPool: {
+    idleTimeoutMinutes: number;
+    maxConnections: number;
+  };
+  notifications: {
+    inApp: boolean;
+    toast: boolean;
+  };
+  retention: RunRetentionSettings;
+  language: 'zh-CN' | 'en';
 }
 
 export type ServerAuthMethod = 'password' | 'key';
@@ -194,6 +212,13 @@ export interface RunSnapshotRecord {
   status: RunStatus;
   pipelineSnapshot: unknown;
   contextSnapshot: unknown;
+}
+
+export interface RunCompletionNotification {
+  runId: number;
+  pipelineId: number;
+  pipelineName: string;
+  status: Extract<RunStatus, 'succeeded' | 'failed' | 'cancelled'>;
 }
 
 export type ExecutionEvent =

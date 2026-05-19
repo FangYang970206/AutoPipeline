@@ -22,8 +22,8 @@ interface PoolEntry {
 
 export class SshConnectionPool {
   private readonly entries = new Map<string, PoolEntry>();
-  private readonly idleTimeoutMs: number;
-  private readonly maxConnections: number;
+  private idleTimeoutMs: number;
+  private maxConnections: number;
 
   constructor(
     private readonly credentials: CredentialStore,
@@ -32,6 +32,14 @@ export class SshConnectionPool {
   ) {
     this.idleTimeoutMs = options.idleTimeoutMs ?? 5 * 60 * 1000;
     this.maxConnections = options.maxConnections ?? 10;
+  }
+
+  updateOptions(options: Required<SshConnectionPoolOptions>) {
+    this.idleTimeoutMs = options.idleTimeoutMs;
+    this.maxConnections = options.maxConnections;
+    for (const [key, entry] of this.entries) {
+      this.refreshIdleTimer(key, entry);
+    }
   }
 
   async acquire(server: ServerRecord): Promise<PooledSshConnection> {

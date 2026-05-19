@@ -42,8 +42,13 @@ interface AutoPipelineApi {
     onEvent: (callback: (event: unknown) => void) => () => void;
   };
   settings: {
+    get: () => Promise<unknown>;
+    update: (settings: unknown) => Promise<unknown>;
     getRetention: () => Promise<unknown>;
     updateRetention: (settings: unknown) => Promise<unknown>;
+  };
+  notifications: {
+    onRunCompleted: (callback: (notification: unknown) => void) => () => void;
   };
 }
 
@@ -93,8 +98,17 @@ const api: AutoPipelineApi = {
     },
   },
   settings: {
+    get: () => ipcRenderer.invoke('settings:get'),
+    update: (settings) => ipcRenderer.invoke('settings:update', settings),
     getRetention: () => ipcRenderer.invoke('settings:retention:get'),
     updateRetention: (settings) => ipcRenderer.invoke('settings:retention:update', settings),
+  },
+  notifications: {
+    onRunCompleted: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+      ipcRenderer.on('notifications:run-completed', listener);
+      return () => ipcRenderer.removeListener('notifications:run-completed', listener);
+    },
   },
 };
 
