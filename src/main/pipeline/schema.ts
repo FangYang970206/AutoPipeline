@@ -43,6 +43,8 @@ export function migratePipelineSchema(db: Database) {
       started_at text,
       completed_at text,
       duration_ms integer,
+      parameters text not null default '{}',
+      context_snapshot text not null default '{}',
       created_at text not null default current_timestamp
     );
 
@@ -65,6 +67,8 @@ export function migratePipelineSchema(db: Database) {
   `);
   ensureColumn(db, 'pipelines', 'parameters', "text not null default '[]'");
   ensureColumn(db, 'pipelines', 'shell_sessions', "text not null default '[]'");
+  ensureColumn(db, 'runs', 'parameters', "text not null default '{}'");
+  ensureColumn(db, 'runs', 'context_snapshot', "text not null default '{}'");
 }
 
 function ensureColumn(db: Database, table: string, column: string, definition: string) {
