@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button } from '../components/ui/button';
-import type { PipelineRecord, PipelineTreeFolder } from '../types';
+import type { PipelineImportOptions, PipelineRecord, PipelineTreeFolder } from '../types';
 import { DagEditor } from './DagEditor';
 
 export function PipelineManagement() {
@@ -12,6 +12,15 @@ export function PipelineManagement() {
   const [selectedPipeline, setSelectedPipeline] = useState<PipelineRecord | null>(null);
   const [query, setQuery] = useState('');
   const [message, setMessage] = useState('');
+  const [pendingImport, setPendingImport] = useState<{
+    filePath: string;
+    duplicateName: string | null;
+    unknownServers: string[];
+    localServers: string[];
+    serverMappings: Record<string, string>;
+    duplicateMode: 'rename' | 'overwrite';
+    renameTo: string;
+  } | null>(null);
 
   useEffect(() => {
     void reload();
@@ -89,6 +98,81 @@ export function PipelineManagement() {
     await reload();
   }
 
+  async function exportPipeline(pipeline: PipelineRecord) {
+    if (!api) {
+      return;
+    }
+    const result = await api.exportToFile(pipeline.id);
+    if (result.filePath) {
+      setMessage(`Exported ${pipeline.name}`);
+    }
+  }
+
+  async function importPipeline() {
+    if (!api) {
+      return;
+    }
+    try {
+      const inspection = await api.inspectImportFile();
+      if (!inspection.filePath) {
+        return;
+      }
+      const unknownServers = inspection.unknownServers ?? [];
+      const localServers = inspection.localServers ?? [];
+      if (unknownServers.length > 0 || inspection.duplicateName) {
+        setPendingImport({
+          filePath: inspection.filePath,
+          duplicateName: inspection.duplicateName ?? null,
+          unknownServers,
+          localServers,
+          serverMappings: Object.fromEntries(unknownServers.map((server) => [server, localServers[0] ?? ''])),
+          duplicateMode: 'rename',
+          renameTo: inspection.duplicateName ? `${inspection.duplicateName} Copy` : '',
+        });
+        return;
+      }
+      await completeImport(inspection.filePath, {});
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Import failed');
+    }
+  }
+
+  async function completeImport(filePath: string, options: PipelineImportOptions) {
+    if (!api) {
+      return;
+    }
+    const imported = await api.importFromFile(filePath, options);
+    setSelectedPipeline(imported);
+    setPendingImport(null);
+    setMessage(`Imported ${imported.name}`);
+    await reload();
+  }
+
+  async function confirmPendingImport() {
+    if (!pendingImport) {
+      return;
+    }
+    const options: PipelineImportOptions = {};
+    if (pendingImport.unknownServers.length > 0) {
+      if (Object.values(pendingImport.serverMappings).some((value) => !value)) {
+        setMessage('Server mapping is required');
+        return;
+      }
+      options.serverMappings = pendingImport.serverMappings;
+    }
+    if (pendingImport.duplicateName) {
+      options.duplicateName =
+        pendingImport.duplicateMode === 'overwrite'
+          ? { mode: 'overwrite' }
+          : { mode: 'rename', name: pendingImport.renameTo };
+    }
+    try {
+      await completeImport(pendingImport.filePath, options);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Import failed');
+    }
+  }
+
   async function search(nextQuery: string) {
     setQuery(nextQuery);
     if (!api) {
@@ -120,10 +204,79 @@ export function PipelineManagement() {
           <Button className="mt-2 w-full" onClick={() => void createPipeline()} type="button">
             创建 Pipeline
           </Button>
+          <Button className="mt-2 w-full" onClick={() => void importPipeline()} type="button" variant="ghost">
+            Import Pipeline
+          </Button>
           <p aria-live="polite" className="mt-3 min-h-5 text-sm text-slate-300">
             {message}
           </p>
         </div>
+        {pendingImport ? (
+          <div className="rounded-md border border-border bg-slate-900 p-4">
+            <h2 className="mb-3 text-lg font-semibold">Import Pipeline</h2>
+            {pendingImport.unknownServers.map((serverName) => (
+              <label className="mt-3 grid gap-1 text-sm text-slate-300" key={serverName}>
+                <span>{serverName}</span>
+                <select
+                  className={inputClass}
+                  value={pendingImport.serverMappings[serverName] ?? ''}
+                  onChange={(event) =>
+                    setPendingImport((current) =>
+                      current
+                        ? {
+                            ...current,
+                            serverMappings: { ...current.serverMappings, [serverName]: event.target.value },
+                          }
+                        : current,
+                    )
+                  }
+                >
+                  {pendingImport.localServers.map((localServer) => (
+                    <option key={localServer} value={localServer}>
+                      {localServer}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+            {pendingImport.duplicateName ? (
+              <div className="mt-3 grid gap-2 text-sm text-slate-300">
+                <label className="flex items-center gap-2">
+                  <input
+                    checked={pendingImport.duplicateMode === 'rename'}
+                    name="duplicate-import-mode"
+                    onChange={() => setPendingImport((current) => current ? { ...current, duplicateMode: 'rename' } : current)}
+                    type="radio"
+                  />
+                  Rename duplicate
+                </label>
+                <input
+                  className={inputClass}
+                  disabled={pendingImport.duplicateMode !== 'rename'}
+                  value={pendingImport.renameTo}
+                  onChange={(event) => setPendingImport((current) => current ? { ...current, renameTo: event.target.value } : current)}
+                />
+                <label className="flex items-center gap-2">
+                  <input
+                    checked={pendingImport.duplicateMode === 'overwrite'}
+                    name="duplicate-import-mode"
+                    onChange={() => setPendingImport((current) => current ? { ...current, duplicateMode: 'overwrite' } : current)}
+                    type="radio"
+                  />
+                  Overwrite existing
+                </label>
+              </div>
+            ) : null}
+            <div className="mt-3 flex gap-2">
+              <Button onClick={() => void confirmPendingImport()} type="button">
+                Confirm Import
+              </Button>
+              <Button onClick={() => setPendingImport(null)} type="button" variant="ghost">
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </aside>
       <section className="min-w-0">
         {selectedPipeline ? <DagEditor pipeline={selectedPipeline} /> : <h2 className="mb-3 text-xl font-semibold">Pipeline</h2>}
@@ -136,6 +289,7 @@ export function PipelineManagement() {
               onDeletePipeline={deletePipeline}
               onRenameFolder={renameFolder}
               onRenamePipeline={renamePipeline}
+              onExportPipeline={exportPipeline}
               onSelectPipeline={setSelectedPipeline}
               onSelectFolder={setSelectedFolderId}
               selectedFolderId={selectedFolderId}
@@ -154,6 +308,7 @@ function FolderNode({
   onDeletePipeline,
   onRenameFolder,
   onRenamePipeline,
+  onExportPipeline,
   onSelectPipeline,
   onSelectFolder,
   selectedFolderId,
@@ -163,6 +318,7 @@ function FolderNode({
   onDeletePipeline: (pipeline: PipelineRecord) => Promise<void>;
   onRenameFolder: (folder: PipelineTreeFolder) => Promise<void>;
   onRenamePipeline: (pipeline: PipelineRecord) => Promise<void>;
+  onExportPipeline: (pipeline: PipelineRecord) => Promise<void>;
   onSelectPipeline: (pipeline: PipelineRecord) => void;
   onSelectFolder: (id: number) => void;
   selectedFolderId: number | null;
@@ -193,6 +349,9 @@ function FolderNode({
               <Button onClick={() => void onRenamePipeline(pipeline)} type="button" variant="ghost">
                 重命名
               </Button>
+              <Button onClick={() => void onExportPipeline(pipeline)} type="button" variant="ghost">
+                Export
+              </Button>
               <Button onClick={() => void onDeletePipeline(pipeline)} type="button" variant="ghost">
                 删除
               </Button>
@@ -207,6 +366,7 @@ function FolderNode({
             onDeletePipeline={onDeletePipeline}
             onRenameFolder={onRenameFolder}
             onRenamePipeline={onRenamePipeline}
+            onExportPipeline={onExportPipeline}
             onSelectPipeline={onSelectPipeline}
             onSelectFolder={onSelectFolder}
             selectedFolderId={selectedFolderId}

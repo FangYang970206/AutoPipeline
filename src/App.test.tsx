@@ -187,6 +187,81 @@ describe('App shell', () => {
     expect(await screen.findByText('Deploy API')).toBeInTheDocument();
   });
 
+  it('exports and imports pipelines through the Pipeline view', async () => {
+    const exportToFile = vi.fn().mockResolvedValue({ filePath: 'D:/tmp/deploy.json' });
+    const inspectImportFile = vi.fn().mockResolvedValue({
+      filePath: 'D:/tmp/deploy.json',
+      duplicateName: 'Deploy API',
+      unknownServers: ['Prod'],
+      localServers: ['Production'],
+    });
+    const importFromFile = vi.fn().mockResolvedValue({
+      id: 3,
+      name: 'Deploy API Copy',
+      folderId: null,
+      dagEdges: [],
+      parameters: [],
+      shellSessions: [],
+      createdAt: '2026-05-18T00:00:00Z',
+      updatedAt: '2026-05-18T00:00:00Z',
+    });
+    window.autoPipeline = {
+      app: {
+        getVersion: async () => '0.1.0',
+        ping: async () => 'pong',
+      },
+      servers: createServerApiMock(),
+      pipelines: {
+        ...createPipelineApiMock(),
+        tree: vi.fn().mockResolvedValue([
+          {
+            id: 1,
+            name: 'Production',
+            parentId: null,
+            createdAt: '2026-05-18T00:00:00Z',
+            updatedAt: '2026-05-18T00:00:00Z',
+            folders: [],
+            pipelines: [
+              {
+                id: 2,
+                name: 'Deploy API',
+                folderId: 1,
+                dagEdges: [],
+                parameters: [],
+                shellSessions: [],
+                createdAt: '2026-05-18T00:00:00Z',
+                updatedAt: '2026-05-18T00:00:00Z',
+              },
+            ],
+          },
+        ]),
+        exportToFile,
+        inspectImportFile,
+        importFromFile,
+      },
+      commands: createCommandApiMock(),
+      runs: createRunsApiMock(),
+      settings: createSettingsApiMock(),
+      notifications: createNotificationApiMock(),
+    };
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Export' }));
+    await waitFor(() => expect(exportToFile).toHaveBeenCalledWith(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Import Pipeline' }));
+    fireEvent.change(await screen.findByLabelText('Prod'), { target: { value: 'Production' } });
+    fireEvent.click(screen.getByLabelText('Rename duplicate'));
+    fireEvent.change(screen.getByDisplayValue('Deploy API Copy'), { target: { value: 'Deploy API Copy' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Import' }));
+
+    await waitFor(() =>
+      expect(importFromFile).toHaveBeenCalledWith('D:/tmp/deploy.json', {
+        serverMappings: { Prod: 'Production' },
+        duplicateName: { mode: 'rename', name: 'Deploy API Copy' },
+      }),
+    );
+  });
+
   it('starts a pipeline run and renders streamed command output', async () => {
     const listeners: Array<(event: ExecutionEvent) => void> = [];
     window.autoPipeline = {
@@ -444,6 +519,9 @@ function createPipelineApiMock() {
     deletePipeline: vi.fn(),
     getGraph: vi.fn().mockResolvedValue({ units: [], edges: [] }),
     saveGraph: vi.fn(),
+    exportToFile: vi.fn().mockResolvedValue({ filePath: 'pipeline.json' }),
+    inspectImportFile: vi.fn().mockResolvedValue({ filePath: null }),
+    importFromFile: vi.fn(),
     updateParameters: vi.fn().mockImplementation(async (id, parameters) => ({
       id,
       name: 'Deploy API',
