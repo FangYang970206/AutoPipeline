@@ -55,6 +55,18 @@ describe('preload contract', () => {
         deletePipeline: async () => undefined,
         getGraph: async () => ({ units: [], edges: [] }),
         saveGraph: async () => undefined,
+        exportToFile: async () => ({ filePath: null }),
+        inspectImportFile: async () => ({ filePath: null }),
+        importFromFile: async (_filePath, _options) => ({
+          id: 1,
+          name: 'Deploy API',
+          folderId: null,
+          dagEdges: [],
+          parameters: [],
+          shellSessions: [],
+          createdAt: '2026-05-18T00:00:00Z',
+          updatedAt: '2026-05-18T00:00:00Z',
+        }),
         updateParameters: async (id, parameters) => ({
           id,
           name: 'Deploy API',
