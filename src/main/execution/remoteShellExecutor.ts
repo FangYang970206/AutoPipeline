@@ -12,7 +12,7 @@ export class RemoteShellExecutor implements LocalCommandExecutor {
     private readonly pool: SshConnectionPool,
   ) {}
 
-  async execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1]) {
+  async execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1], options?: Parameters<LocalCommandExecutor['execute']>[2]) {
     if (command.type !== 'shell') {
       throw new Error(`Unsupported remote command type: ${command.type}`);
     }
@@ -27,27 +27,38 @@ export class RemoteShellExecutor implements LocalCommandExecutor {
       let settled = false;
       let timedOut = false;
       let channel: ClientChannel | undefined;
+      let forceClose: NodeJS.Timeout | undefined;
+      const interrupt = () => {
+        channel?.signal('INT');
+        forceClose = setTimeout(() => {
+          if (!settled) {
+            channel?.close();
+          }
+        }, 3000);
+        forceClose.unref();
+      };
       const timeout = command.config.timeout
         ? setTimeout(() => {
             timedOut = true;
-            channel?.signal('INT');
-            setTimeout(() => {
-              if (!settled) {
-                channel?.close();
-              }
-            }, 3000).unref();
+            interrupt();
           }, command.config.timeout * 1000)
         : undefined;
+      options?.signal.addEventListener('abort', interrupt, { once: true });
 
       connection.client.exec(command.config.script, (error, stream) => {
         if (error) {
           settled = true;
           clearTimeout(timeout);
+          clearTimeout(forceClose);
+          options?.signal.removeEventListener('abort', interrupt);
           emit({ type: 'stderr', data: error.message });
           resolve({ exitCode: 1 });
           return;
         }
         channel = stream;
+        if (options?.signal.aborted) {
+          interrupt();
+        }
         stream.on('data', (chunk: Buffer) => emit({ type: 'stdout', data: chunk.toString('utf8') }));
         stream.stderr.on('data', (chunk: Buffer) => emit({ type: 'stderr', data: chunk.toString('utf8') }));
         stream.on('close', (code: number | null) => {
@@ -56,6 +67,8 @@ export class RemoteShellExecutor implements LocalCommandExecutor {
           }
           settled = true;
           clearTimeout(timeout);
+          clearTimeout(forceClose);
+          options?.signal.removeEventListener('abort', interrupt);
           resolve({ exitCode: timedOut ? 124 : (code ?? 0) });
         });
       });
@@ -67,6 +80,7 @@ export class RemoteShellExecutor implements LocalCommandExecutor {
     sessionName: string,
     command: CommandRecord,
     emit: Parameters<LocalCommandExecutor['execute']>[1],
+    options?: Parameters<LocalCommandExecutor['execute']>[2],
   ) {
     if (command.type !== 'shell') {
       throw new Error(`Unsupported remote command type: ${command.type}`);
@@ -89,7 +103,7 @@ export class RemoteShellExecutor implements LocalCommandExecutor {
       runSessions.set(key, session);
     }
     try {
-      return await session.execute(command, emit);
+      return await session.execute(command, emit, options?.signal);
     } catch (error) {
       if (!(error instanceof SessionClosedError)) {
         throw error;
@@ -98,7 +112,7 @@ export class RemoteShellExecutor implements LocalCommandExecutor {
       const connection = await this.pool.acquire(server);
       session = await RemoteShellSession.open(connection.client);
       runSessions.set(key, session);
-      return session.execute(command, emit);
+      return session.execute(command, emit, options?.signal);
     }
   }
 
@@ -136,8 +150,8 @@ class RemoteShellSession {
     });
   }
 
-  execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1]) {
-    const run = this.queue.then(() => this.runCommand(command, emit));
+  execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1], signal?: AbortSignal) {
+    const run = this.queue.then(() => this.runCommand(command, emit, signal));
     this.queue = run.then(
       () => undefined,
       () => undefined,
@@ -150,7 +164,7 @@ class RemoteShellSession {
     this.stream.close();
   }
 
-  private runCommand(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1]) {
+  private runCommand(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1], signal?: AbortSignal) {
     if (command.type !== 'shell') {
       throw new Error(`Unsupported remote command type: ${command.type}`);
     }
@@ -164,12 +178,26 @@ class RemoteShellSession {
     let settled = false;
 
     return new Promise<{ exitCode: number }>((resolve) => {
+      let forceClose: NodeJS.Timeout | undefined;
       const timeout = command.config.timeout
         ? setTimeout(() => {
             finish(124);
             this.close();
           }, command.config.timeout * 1000)
         : undefined;
+      const interrupt = () => {
+        this.stream.signal('INT');
+        forceClose = setTimeout(() => {
+          if (!settled) {
+            this.close();
+          }
+        }, 3000);
+        forceClose.unref();
+      };
+      signal?.addEventListener('abort', interrupt, { once: true });
+      if (signal?.aborted) {
+        interrupt();
+      }
 
       const finish = (exitCode: number) => {
         if (settled) {
@@ -177,6 +205,8 @@ class RemoteShellSession {
         }
         settled = true;
         clearTimeout(timeout);
+        clearTimeout(forceClose);
+        signal?.removeEventListener('abort', interrupt);
         this.stream.off('data', onStdout);
         this.stream.stderr.off('data', onStderr);
         this.stream.off('exit', onExit);

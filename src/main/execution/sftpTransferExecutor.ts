@@ -34,6 +34,7 @@ type SftpLike = {
   readdir(path: string, callback: (error: Error | undefined, entries?: Array<{ filename: string; attrs: { isDirectory: () => boolean; size: number } }>) => void): void;
   fastPut(localPath: string, remotePath: string, options: { step?: (transferred: number, chunk: number, total: number) => void }, callback: (error?: Error) => void): void;
   fastGet(remotePath: string, localPath: string, options: { step?: (transferred: number, chunk: number, total: number) => void }, callback: (error?: Error) => void): void;
+  destroy?: () => void;
   end?: () => void;
 };
 
@@ -43,7 +44,7 @@ export class SftpTransferExecutor implements LocalCommandExecutor {
     private readonly pool: SshConnectionPool,
   ) {}
 
-  async execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1]): Promise<TransferExecutionResult> {
+  async execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1], options?: Parameters<LocalCommandExecutor['execute']>[2]): Promise<TransferExecutionResult> {
     if (command.type !== 'transfer') {
       throw new Error(`Unsupported transfer command type: ${command.type}`);
     }
@@ -53,13 +54,18 @@ export class SftpTransferExecutor implements LocalCommandExecutor {
 
     const server = this.servers.get(command.config.serverId);
     const connection = await this.pool.acquire(server);
-    const sftp = await openSftp(connection.client as { sftp(callback: (error: Error | undefined, sftp: SftpLike) => void): void });
+    const sftp = await openSftp(connection.client as { sftp(callback: (error: Error | undefined, sftp: SftpLike) => void): void }, options?.signal);
+    const abortTransfer = () => closeSftpForAbort(sftp);
+    options?.signal.addEventListener('abort', abortTransfer, { once: true });
     try {
+      if (options?.signal.aborted) {
+        throw new Error('Transfer cancelled');
+      }
       const files =
         command.config.direction === 'upload'
-          ? await planUpload(command, sftp)
-          : await planDownload(command, sftp);
-      const actions = await planOverwriteActions(command, sftp, files);
+          ? await planUpload(command, sftp, options?.signal)
+          : await planDownload(command, sftp, options?.signal);
+      const actions = await planOverwriteActions(command, sftp, files, options?.signal);
       const totalBytes = actions.reduce((sum, action) => action.skipped ? sum : sum + action.file.size, 0);
       let transferredBytes = 0;
       let fileCount = 0;
@@ -70,6 +76,9 @@ export class SftpTransferExecutor implements LocalCommandExecutor {
       }
 
       for (const action of actions) {
+        if (options?.signal.aborted) {
+          throw new Error('Transfer cancelled');
+        }
         if (action.skipped) {
           continue;
         }
@@ -87,11 +96,11 @@ export class SftpTransferExecutor implements LocalCommandExecutor {
           });
         };
         if (command.config.direction === 'upload') {
-          await mkdirRemote(sftp, posix.dirname(file.remotePath));
-          await fastPut(sftp, file.localPath, file.remotePath, report);
+          await mkdirRemote(sftp, posix.dirname(file.remotePath), options?.signal);
+          await fastPut(sftp, file.localPath, file.remotePath, report, options?.signal);
         } else {
           await mkdir(dirname(file.localPath), { recursive: true });
-          await fastGet(sftp, file.remotePath, file.localPath, report);
+          await fastGet(sftp, file.remotePath, file.localPath, report, options?.signal);
         }
         fileCount += 1;
       }
@@ -101,16 +110,17 @@ export class SftpTransferExecutor implements LocalCommandExecutor {
       emit({ type: 'stderr', data: error instanceof Error ? error.message : 'Transfer failed' });
       return { exitCode: 1, summary: { fileCount: 0, totalBytes: 0, skippedCount: 0 } };
     } finally {
+      options?.signal.removeEventListener('abort', abortTransfer);
       sftp.end?.();
     }
   }
 }
 
-async function planOverwriteActions(command: Extract<CommandRecord, { type: 'transfer' }>, sftp: SftpLike, files: TransferFile[]): Promise<TransferAction[]> {
+async function planOverwriteActions(command: Extract<CommandRecord, { type: 'transfer' }>, sftp: SftpLike, files: TransferFile[], signal?: AbortSignal): Promise<TransferAction[]> {
   const actions: TransferAction[] = [];
   for (const file of files) {
     const destination = command.config.direction === 'upload' ? file.remotePath : file.localPath;
-    const exists = command.config.direction === 'upload' ? await remoteExists(sftp, file.remotePath) : await localExists(file.localPath);
+    const exists = command.config.direction === 'upload' ? await remoteExists(sftp, file.remotePath, signal) : await localExists(file.localPath);
     if (exists && command.config.overwriteMode === 'error') {
       throw new Error(`Destination already exists: ${destination}`);
     }
@@ -119,11 +129,11 @@ async function planOverwriteActions(command: Extract<CommandRecord, { type: 'tra
   return actions;
 }
 
-async function planUpload(command: Extract<CommandRecord, { type: 'transfer' }>, sftp: SftpLike): Promise<TransferFile[]> {
+async function planUpload(command: Extract<CommandRecord, { type: 'transfer' }>, sftp: SftpLike, signal?: AbortSignal): Promise<TransferFile[]> {
   const localFiles = await expandLocalSource(command.config.source);
   const sourceIsDirectory = hasGlob(command.config.source) ? false : await isLocalDirectory(command.config.source);
   const destinationIsDirectory =
-    await isRemoteDirectory(sftp, command.config.destination).catch(() => sourceIsDirectory || hasGlob(command.config.source) || localFiles.length > 1);
+    await isRemoteDirectory(sftp, command.config.destination, signal).catch(() => sourceIsDirectory || hasGlob(command.config.source) || localFiles.length > 1);
   const base = localGlobBase(command.config.source);
   return localFiles.map((file) => {
     const relativePath = toPosix(relative(base, file.localPath));
@@ -134,10 +144,10 @@ async function planUpload(command: Extract<CommandRecord, { type: 'transfer' }>,
   });
 }
 
-async function planDownload(command: Extract<CommandRecord, { type: 'transfer' }>, sftp: SftpLike): Promise<TransferFile[]> {
-  const files = await expandRemoteSource(sftp, command.config.source);
+async function planDownload(command: Extract<CommandRecord, { type: 'transfer' }>, sftp: SftpLike, signal?: AbortSignal): Promise<TransferFile[]> {
+  const files = await expandRemoteSource(sftp, command.config.source, signal);
   const destination = resolve(command.config.destination);
-  const sourceIsDirectory = await isRemoteDirectory(sftp, command.config.source).catch(() => false);
+  const sourceIsDirectory = await isRemoteDirectory(sftp, command.config.source, signal).catch(() => false);
   const preserveRelativePaths = sourceIsDirectory || hasGlob(command.config.source);
   const sourceRoot = hasGlob(command.config.source) ? remoteGlobBase(command.config.source) : command.config.source;
   return files.map((file) => ({
@@ -170,20 +180,20 @@ async function listLocalFiles(path: string): Promise<Array<{ localPath: string; 
   return nested.flat();
 }
 
-async function expandRemoteSource(sftp: SftpLike, source: string): Promise<Array<{ remotePath: string; size: number }>> {
+async function expandRemoteSource(sftp: SftpLike, source: string, signal?: AbortSignal): Promise<Array<{ remotePath: string; size: number }>> {
   if (hasGlob(source)) {
     const base = remoteGlobBase(source);
     const matcher = remoteGlobMatcher(source);
-    const files = await expandRemoteSource(sftp, base);
+    const files = await expandRemoteSource(sftp, base, signal);
     return files.filter((file) => matcher(file.remotePath));
   }
-  const stats = await statRemote(sftp, source);
+  const stats = await statRemote(sftp, source, signal);
   if (!stats.isDirectory()) {
     return [{ remotePath: source, size: stats.size }];
   }
-  const entries = await readdirRemote(sftp, source);
+  const entries = await readdirRemote(sftp, source, signal);
   const nested = await Promise.all(
-    entries.map((entry) => expandRemoteSource(sftp, posix.join(source, entry.filename))),
+    entries.map((entry) => expandRemoteSource(sftp, posix.join(source, entry.filename), signal)),
   );
   return nested.flat();
 }
@@ -251,9 +261,16 @@ function relativeRemote(root: string, file: string) {
   return posix.relative(root.replace(/\/+$/, ''), file);
 }
 
-function openSftp(client: { sftp(callback: (error: Error | undefined, sftp: SftpLike) => void): void }) {
+function openSftp(client: { sftp(callback: (error: Error | undefined, sftp: SftpLike) => void): void }, signal?: AbortSignal) {
   return new Promise<SftpLike>((resolve, reject) => {
+    const cancel = () => reject(new Error('Transfer cancelled'));
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) {
+      cancel();
+      return;
+    }
     client.sftp((error, sftp) => {
+      signal?.removeEventListener('abort', cancel);
       if (error) {
         reject(error);
         return;
@@ -263,9 +280,16 @@ function openSftp(client: { sftp(callback: (error: Error | undefined, sftp: Sftp
   });
 }
 
-function statRemote(sftp: SftpLike, path: string) {
+function statRemote(sftp: SftpLike, path: string, signal?: AbortSignal) {
   return new Promise<{ isDirectory: () => boolean; size: number }>((resolve, reject) => {
+    const cancel = createAbortHandler(sftp, reject);
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) {
+      cancel();
+      return;
+    }
     sftp.stat(path, (error, stats) => {
+      signal?.removeEventListener('abort', cancel);
       if (error || !stats) {
         reject(error ?? new Error(`Remote path not found: ${path}`));
         return;
@@ -275,12 +299,12 @@ function statRemote(sftp: SftpLike, path: string) {
   });
 }
 
-async function isRemoteDirectory(sftp: SftpLike, path: string) {
-  return (await statRemote(sftp, path)).isDirectory();
+async function isRemoteDirectory(sftp: SftpLike, path: string, signal?: AbortSignal) {
+  return (await statRemote(sftp, path, signal)).isDirectory();
 }
 
-async function remoteExists(sftp: SftpLike, path: string) {
-  return statRemote(sftp, path).then(
+async function remoteExists(sftp: SftpLike, path: string, signal?: AbortSignal) {
+  return statRemote(sftp, path, signal).then(
     () => true,
     () => false,
   );
@@ -300,7 +324,7 @@ async function isLocalDirectory(path: string) {
   );
 }
 
-async function mkdirRemote(sftp: SftpLike, path: string) {
+async function mkdirRemote(sftp: SftpLike, path: string, signal?: AbortSignal) {
   const normalized = path.replace(/\/+$/, '');
   if (normalized === '' || normalized === '.') {
     return;
@@ -313,13 +337,20 @@ async function mkdirRemote(sftp: SftpLike, path: string) {
     if (await remoteExists(sftp, current)) {
       continue;
     }
-    await mkdirRemoteDirectory(sftp, current);
+    await mkdirRemoteDirectory(sftp, current, signal);
   }
 }
 
-function mkdirRemoteDirectory(sftp: SftpLike, path: string) {
+function mkdirRemoteDirectory(sftp: SftpLike, path: string, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
+    const cancel = createAbortHandler(sftp, reject);
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) {
+      cancel();
+      return;
+    }
     sftp.mkdir(path, (error) => {
+      signal?.removeEventListener('abort', cancel);
       if (error) {
         reject(error);
         return;
@@ -329,9 +360,16 @@ function mkdirRemoteDirectory(sftp: SftpLike, path: string) {
   });
 }
 
-function readdirRemote(sftp: SftpLike, path: string) {
+function readdirRemote(sftp: SftpLike, path: string, signal?: AbortSignal) {
   return new Promise<Array<{ filename: string; attrs: { isDirectory: () => boolean; size: number } }>>((resolve, reject) => {
+    const cancel = createAbortHandler(sftp, reject);
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) {
+      cancel();
+      return;
+    }
     sftp.readdir(path, (error, entries) => {
+      signal?.removeEventListener('abort', cancel);
       if (error || !entries) {
         reject(error ?? new Error(`Remote directory not found: ${path}`));
         return;
@@ -341,9 +379,16 @@ function readdirRemote(sftp: SftpLike, path: string) {
   });
 }
 
-function fastPut(sftp: SftpLike, localPath: string, remotePath: string, step: (transferred: number) => void) {
+function fastPut(sftp: SftpLike, localPath: string, remotePath: string, step: (transferred: number) => void, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
+    const cancel = createAbortHandler(sftp, reject);
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) {
+      cancel();
+      return;
+    }
     sftp.fastPut(localPath, remotePath, { step: (transferred) => step(transferred) }, (error) => {
+      signal?.removeEventListener('abort', cancel);
       if (error) {
         reject(error);
         return;
@@ -353,9 +398,16 @@ function fastPut(sftp: SftpLike, localPath: string, remotePath: string, step: (t
   });
 }
 
-function fastGet(sftp: SftpLike, remotePath: string, localPath: string, step: (transferred: number) => void) {
+function fastGet(sftp: SftpLike, remotePath: string, localPath: string, step: (transferred: number) => void, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
+    const cancel = createAbortHandler(sftp, reject);
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) {
+      cancel();
+      return;
+    }
     sftp.fastGet(remotePath, localPath, { step: (transferred) => step(transferred) }, (error) => {
+      signal?.removeEventListener('abort', cancel);
       if (error) {
         reject(error);
         return;
@@ -363,4 +415,25 @@ function fastGet(sftp: SftpLike, remotePath: string, localPath: string, step: (t
       resolve();
     });
   });
+}
+
+function createAbortHandler(sftp: SftpLike, reject: (error: Error) => void) {
+  let settled = false;
+  return () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    closeSftpForAbort(sftp);
+    const forceClose = setTimeout(() => {
+      sftp.destroy?.();
+      sftp.end?.();
+    }, 3000);
+    forceClose.unref();
+    reject(new Error('Transfer cancelled'));
+  };
+}
+
+function closeSftpForAbort(sftp: SftpLike) {
+  sftp.end?.();
 }

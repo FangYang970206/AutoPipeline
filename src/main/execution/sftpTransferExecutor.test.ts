@@ -208,6 +208,55 @@ describe('SftpTransferExecutor', () => {
     expect(result).toEqual({ exitCode: 0, summary: { fileCount: 0, totalBytes: 0, skippedCount: 1 } });
     expect(progress).toEqual([{ transferredBytes: 0, totalBytes: 0, percent: 100 }]);
   });
+
+  it('settles and closes the SFTP channel when cancelled mid-transfer', async () => {
+    await writeFile(join(localRoot, 'artifact.txt'), 'new');
+    const controller = new AbortController();
+    const sftp = new HangingSftp(remoteRoot);
+    const executor = new SftpTransferExecutor(
+      { get: () => ({ id: 1 }) } as never,
+      { acquire: async () => ({ client: { sftp: (callback: (error: Error | undefined, channel: HangingSftp) => void) => callback(undefined, sftp) } }) } as never,
+    );
+
+    const running = executor.execute(
+      createTransferCommand({
+        direction: 'upload',
+        source: join(localRoot, 'artifact.txt'),
+        destination: '/deploy/artifact.txt',
+      }),
+      () => {},
+      { runId: 1, signal: controller.signal },
+    );
+    await sftp.transferStarted;
+    controller.abort();
+
+    await expect(running).resolves.toMatchObject({ exitCode: 1 });
+    expect(sftp.endCalls).toBeGreaterThan(0);
+  });
+
+  it('settles and closes the SFTP channel when cancelled during remote planning', async () => {
+    const controller = new AbortController();
+    const sftp = new HangingStatSftp(remoteRoot);
+    const executor = new SftpTransferExecutor(
+      { get: () => ({ id: 1 }) } as never,
+      { acquire: async () => ({ client: { sftp: (callback: (error: Error | undefined, channel: HangingStatSftp) => void) => callback(undefined, sftp) } }) } as never,
+    );
+
+    const running = executor.execute(
+      createTransferCommand({
+        direction: 'download',
+        source: '/srv/**/*.log',
+        destination: join(localRoot, 'downloaded'),
+      }),
+      () => {},
+      { runId: 1, signal: controller.signal },
+    );
+    await sftp.statStarted;
+    controller.abort();
+
+    await expect(running).resolves.toMatchObject({ exitCode: 1 });
+    expect(sftp.endCalls).toBeGreaterThan(0);
+  });
 });
 
 function createExecutor() {
@@ -301,6 +350,46 @@ class FakeSftp {
 
   private toLocal(remotePath: string) {
     return join(this.root, normalizeRemote(remotePath));
+  }
+}
+
+class HangingSftp extends FakeSftp {
+  endCalls = 0;
+  private markStarted!: () => void;
+  transferStarted = new Promise<void>((resolve) => {
+    this.markStarted = resolve;
+  });
+
+  override async fastPut(
+    _localPath: string,
+    _remotePath: string,
+    _options: { step?: (transferred: number, _chunk: number, total: number) => void },
+    _callback: (error?: Error) => void,
+  ) {
+    this.markStarted();
+  }
+
+  override end() {
+    this.endCalls += 1;
+  }
+}
+
+class HangingStatSftp extends FakeSftp {
+  endCalls = 0;
+  private markStarted!: () => void;
+  statStarted = new Promise<void>((resolve) => {
+    this.markStarted = resolve;
+  });
+
+  override async stat(
+    _path: string,
+    _callback: (error: NodeJS.ErrnoException | undefined, stats?: { isDirectory: () => boolean; size: number }) => void,
+  ) {
+    this.markStarted();
+  }
+
+  override end() {
+    this.endCalls += 1;
   }
 }
 
