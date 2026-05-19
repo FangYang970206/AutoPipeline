@@ -168,7 +168,7 @@ export class PipelineRepository {
     return mapFolder(row);
   }
 
-  private getPipeline(id: number): PipelineRecord {
+  getPipeline(id: number): PipelineRecord {
     const row = this.db.prepare('select * from pipelines where id = ?').get(id) as PipelineRow | undefined;
     if (!row) {
       throw new Error(`Pipeline not found: ${id}`);
