@@ -232,6 +232,8 @@ describe('App shell', () => {
           }
           return { id: 7, pipelineId: 2, status: 'succeeded' };
         }),
+        cancel: vi.fn().mockResolvedValue(undefined),
+        resume: vi.fn().mockResolvedValue({ id: 8, pipelineId: 2, status: 'succeeded' }),
         onEvent: vi.fn().mockImplementation((callback) => {
           listeners.push(callback);
           return () => undefined;
@@ -246,6 +248,91 @@ describe('App shell', () => {
 
     expect(await screen.findByText('building')).toBeInTheDocument();
     expect(screen.getByText('Pipeline 运行成功')).toBeInTheDocument();
+  });
+
+  it('shows cancel, resume, and re-run controls for run states', async () => {
+    const listeners: Array<(event: ExecutionEvent) => void> = [];
+    let finishStart!: () => void;
+    const startCanFinish = new Promise<void>((resolve) => {
+      finishStart = resolve;
+    });
+    const start = vi.fn().mockImplementation(async () => {
+      for (const listener of listeners) {
+        listener({ type: 'run-status', runId: 7, status: 'running' });
+      }
+      await startCanFinish;
+      return { id: 7, pipelineId: 2, status: 'failed', parameters: { env: 'prod', confirmDeploy: true } };
+    });
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const resume = vi.fn().mockResolvedValue({ id: 8, pipelineId: 2, status: 'succeeded', parameters: { env: 'prod', confirmDeploy: true } });
+    window.autoPipeline = {
+      app: {
+        getVersion: async () => '0.1.0',
+        ping: async () => 'pong',
+      },
+      servers: createServerApiMock(),
+      pipelines: {
+        ...createPipelineApiMock(),
+        tree: vi.fn().mockResolvedValue([
+          {
+            id: 1,
+            name: 'Production',
+            parentId: null,
+            createdAt: '2026-05-18T00:00:00Z',
+            updatedAt: '2026-05-18T00:00:00Z',
+            folders: [],
+            pipelines: [
+              {
+                id: 2,
+                name: 'Deploy API',
+                folderId: 1,
+                dagEdges: [],
+                parameters: [
+                  { name: 'env', type: 'string', defaultValue: 'dev' },
+                  { name: 'confirmDeploy', type: 'boolean', defaultValue: false },
+                ],
+                shellSessions: [],
+                createdAt: '2026-05-18T00:00:00Z',
+                updatedAt: '2026-05-18T00:00:00Z',
+              },
+            ],
+          },
+        ]),
+        getGraph: vi.fn().mockResolvedValue({
+          units: [{ id: 'unit-a', name: 'Build', position: { x: 0, y: 0 } }],
+          edges: [],
+        }),
+      },
+      commands: createCommandApiMock(),
+      runs: {
+        start,
+        cancel,
+        resume,
+        onEvent: vi.fn().mockImplementation((callback) => {
+          listeners.push(callback);
+          return () => undefined;
+        }),
+      },
+    };
+    vi.spyOn(window, 'prompt').mockReturnValue('prod');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Deploy API' }));
+    await screen.findByRole('button', { name: 'Deploy API' });
+    fireEvent.click(screen.getAllByRole('button').find((button) => button.textContent === '运行 Pipeline')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(7));
+    finishStart();
+    expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Re-run' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(resume).toHaveBeenCalledWith(7));
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-run' }));
+    await waitFor(() => expect(window.prompt).toHaveBeenLastCalledWith('env', 'prod'));
+    expect(window.confirm).toHaveBeenLastCalledWith('confirmDeploy? Previous: true');
   });
 });
 
@@ -307,6 +394,8 @@ function createPipelineApiMock() {
 function createRunsApiMock() {
   return {
     start: vi.fn().mockResolvedValue({ id: 1, pipelineId: 1, status: 'succeeded' }),
+    cancel: vi.fn().mockResolvedValue(undefined),
+    resume: vi.fn().mockResolvedValue({ id: 2, pipelineId: 1, status: 'succeeded' }),
     onEvent: vi.fn().mockReturnValue(() => undefined),
   };
 }
