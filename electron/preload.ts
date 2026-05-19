@@ -26,6 +26,9 @@ interface AutoPipelineApi {
     saveGraph: (pipelineId: number, graph: unknown) => Promise<void>;
     updateParameters: (pipelineId: number, parameters: unknown) => Promise<unknown>;
     updateShellSessions: (pipelineId: number, shellSessions: unknown) => Promise<unknown>;
+    exportToFile: (pipelineId: number) => Promise<unknown>;
+    inspectImportFile: () => Promise<unknown>;
+    importFromFile: (filePath: string, options: unknown) => Promise<unknown>;
   };
   commands: {
     list: (unitId: string) => Promise<unknown>;
@@ -78,6 +81,9 @@ const api: AutoPipelineApi = {
     saveGraph: (pipelineId, graph) => ipcRenderer.invoke('pipelines:save-graph', pipelineId, graph) as Promise<void>,
     updateParameters: (pipelineId, parameters) => ipcRenderer.invoke('pipelines:update-parameters', pipelineId, parameters),
     updateShellSessions: (pipelineId, shellSessions) => ipcRenderer.invoke('pipelines:update-shell-sessions', pipelineId, shellSessions),
+    exportToFile: (pipelineId) => ipcRenderer.invoke('pipelines:export-file', pipelineId),
+    inspectImportFile: () => ipcRenderer.invoke('pipelines:inspect-import-file'),
+    importFromFile: (filePath, options) => ipcRenderer.invoke('pipelines:import-file', filePath, options),
   },
   commands: {
     list: (unitId) => ipcRenderer.invoke('commands:list', unitId),

@@ -26,6 +26,9 @@ export interface AutoPipelineApi {
     saveGraph: (pipelineId: number, graph: PipelineGraph) => Promise<void>;
     updateParameters: (pipelineId: number, parameters: PipelineParameter[]) => Promise<PipelineRecord>;
     updateShellSessions: (pipelineId: number, shellSessions: string[]) => Promise<PipelineRecord>;
+    exportToFile: (pipelineId: number) => Promise<{ filePath: string | null }>;
+    inspectImportFile: () => Promise<PipelineImportInspection>;
+    importFromFile: (filePath: string, options: PipelineImportOptions) => Promise<PipelineRecord>;
   };
   commands: {
     list: (unitId: string) => Promise<CommandRecord[]>;
@@ -136,6 +139,18 @@ export interface PipelineParameter {
 export interface PipelineTreeFolder extends FolderRecord {
   folders: PipelineTreeFolder[];
   pipelines: PipelineRecord[];
+}
+
+export interface PipelineImportInspection {
+  filePath: string | null;
+  duplicateName?: string | null;
+  unknownServers?: string[];
+  localServers?: string[];
+}
+
+export interface PipelineImportOptions {
+  serverMappings?: Record<string, string>;
+  duplicateName?: { mode: 'rename'; name: string } | { mode: 'overwrite' };
 }
 
 export interface ExecutionUnitRecord {
