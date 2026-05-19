@@ -491,6 +491,73 @@ describe('PipelineEngine', () => {
     expect(closedRuns).toEqual([run.id]);
   });
 
+  it('routes transfer commands through the transfer executor and records the transfer summary', async () => {
+    const progressEvents: Array<{ transferredBytes: number; totalBytes: number; percent: number }> = [];
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = on');
+    migratePipelineSchema(db);
+    const pipelines = new PipelineRepository(db);
+    const commands = new CommandRepository(db);
+    const engine = new PipelineEngine(
+      db,
+      pipelines,
+      commands,
+      {
+        execute: async () => {
+          throw new Error('Expected transfer executor');
+        },
+      },
+      undefined,
+      {
+        execute: async (_command, emit) => {
+          emit({ type: 'transfer-progress', transferredBytes: 5, totalBytes: 5, percent: 100 });
+          return { exitCode: 0, summary: { fileCount: 1, totalBytes: 5, skippedCount: 0 } };
+        },
+      },
+    );
+    const pipeline = pipelines.createPipeline({ name: 'Deploy API', folderId: null });
+    pipelines.savePipelineGraph(pipeline.id, {
+      units: [{ id: 'unit-a', name: 'Upload', position: { x: 0, y: 0 } }],
+      edges: [],
+    });
+    commands.saveCommands('unit-a', [
+      {
+        id: 'cmd-upload',
+        type: 'transfer',
+        order: 0,
+        config: {
+          name: 'Upload artifact',
+          direction: 'upload',
+          source: 'dist/*.zip',
+          destination: '/srv/app',
+          overwriteMode: 'overwrite',
+          serverId: 1,
+        },
+      },
+    ]);
+
+    await expect(
+      engine.runPipeline(pipeline.id, (event) => {
+        if (event.type === 'transfer-progress') {
+          progressEvents.push({
+            transferredBytes: event.transferredBytes,
+            totalBytes: event.totalBytes,
+            percent: event.percent,
+          });
+        }
+      }),
+    ).resolves.toMatchObject({ status: 'succeeded' });
+
+    expect(progressEvents).toEqual([{ transferredBytes: 5, totalBytes: 5, percent: 100 }]);
+    expect(db.prepare('select command_name, status, stdout from command_results order by id').all()).toEqual([
+      {
+        command_name: 'Upload artifact',
+        status: 'succeeded',
+        stdout: '{"fileCount":1,"totalBytes":5,"skippedCount":0}\n',
+      },
+    ]);
+  });
+
   it('starts a ready descendant before unrelated long-running sibling branches finish', async () => {
     const started: string[] = [];
     const finished: string[] = [];

@@ -23,6 +23,7 @@ export class PipelineEngine {
     private readonly commands: CommandRepository,
     private readonly localExecutor: LocalCommandExecutor,
     private readonly remoteExecutor?: LocalCommandExecutor,
+    private readonly transferExecutor?: LocalCommandExecutor,
   ) {}
 
   async runPipeline(
@@ -152,9 +153,18 @@ export class PipelineEngine {
       return { exitCode: 1, outputs: {} };
     }
     const executor =
-      command.type === 'shell' && command.config.serverId !== null && this.remoteExecutor
-        ? this.remoteExecutor
-        : this.localExecutor;
+      command.type === 'transfer'
+        ? this.transferExecutor
+        : command.type === 'shell' && command.config.serverId !== null && this.remoteExecutor
+          ? this.remoteExecutor
+          : this.localExecutor;
+    if (!executor) {
+      stderr = command.type === 'transfer' ? 'Transfer command execution is not configured' : 'Command execution is not configured';
+      emit({ type: 'stderr', runId, commandId: command.id, data: stderr });
+      this.recordCommandResult(runId, command, 'failed', stdout, stderr, 1, Date.now() - started);
+      emit({ type: 'command-status', runId, commandId: command.id, status: 'failed' });
+      return { exitCode: 1, outputs: {} };
+    }
     const execute =
       command.type === 'shell' && command.config.reuseSession && command.config.sessionName
         ? (emitOutput: Parameters<LocalCommandExecutor['execute']>[1]) =>
@@ -171,7 +181,7 @@ export class PipelineEngine {
         execute((streamEvent) => {
           if (streamEvent.type === 'stdout') {
             stdout += streamEvent.data;
-          } else {
+          } else if (streamEvent.type === 'stderr') {
             stderr += streamEvent.data;
           }
           emit({ ...streamEvent, runId, commandId: command.id });
@@ -181,9 +191,12 @@ export class PipelineEngine {
         const message = error instanceof Error ? error.message : 'Command execution failed';
         stderr += message;
         emit({ type: 'stderr', runId, commandId: command.id, data: message });
-        return { exitCode: 1 };
+        return { exitCode: 1, summary: undefined };
       });
     const status = result.exitCode === 0 ? 'succeeded' : 'failed';
+    if (result.summary) {
+      stdout += `${JSON.stringify(result.summary)}\n`;
+    }
     const outputs = parseNamedOutputs(stdout);
     this.recordCommandResult(runId, command, status, stdout, stderr, result.exitCode, Date.now() - started, outputs);
     emit({ type: 'command-status', runId, commandId: command.id, status });
