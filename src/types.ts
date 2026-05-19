@@ -35,6 +35,8 @@ export interface AutoPipelineApi {
   };
   runs: {
     start: (pipelineId: number, parameters?: Record<string, unknown>) => Promise<RunRecord>;
+    cancel: (runId: number) => Promise<void>;
+    resume: (runId: number) => Promise<RunRecord>;
     onEvent: (callback: (event: ExecutionEvent) => void) => () => void;
   };
 }
@@ -169,6 +171,7 @@ export interface RunRecord {
   id: number;
   pipelineId: number;
   status: RunStatus;
+  parameters?: Record<string, unknown>;
 }
 
 export type ExecutionEvent =

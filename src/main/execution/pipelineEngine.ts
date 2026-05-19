@@ -16,6 +16,7 @@ export class PipelineAlreadyRunningError extends Error {
 
 export class PipelineEngine {
   private readonly runningPipelineIds = new Set<number>();
+  private readonly runningRuns = new Map<number, { controller: AbortController; pipelineId: number }>();
 
   constructor(
     private readonly db: Database,
@@ -33,11 +34,59 @@ export class PipelineEngine {
   ): Promise<RunRecord> {
     const parameters = typeof parametersOrEmit === 'function' ? {} : parametersOrEmit;
     const emit = typeof parametersOrEmit === 'function' ? parametersOrEmit : maybeEmit;
+    return this.runPipelineInternal(pipelineId, parameters, emit);
+  }
+
+  async cancelRun(runId: number) {
+    const running = this.runningRuns.get(runId);
+    if (!running) {
+      return;
+    }
+    running.controller.abort();
+  }
+
+  async resumeRun(
+    failedRunId: number,
+    emit: (event: ExecutionEvent) => void = () => {},
+  ): Promise<RunRecord> {
+    const failedRun = this.db
+      .prepare('select id, pipeline_id as pipelineId, status, parameters, context_snapshot as contextSnapshot from runs where id = ?')
+      .get(failedRunId) as { id: number; pipelineId: number; status: RunStatus; parameters: string; contextSnapshot: string } | undefined;
+    if (!failedRun) {
+      throw new Error(`Run ${failedRunId} was not found`);
+    }
+    if (failedRun.status !== 'failed') {
+      throw new Error('Only failed runs can be resumed');
+    }
+    const succeededCommandIds = new Set(
+      (this.db
+        .prepare("select command_id as commandId from command_results where run_id = ? and status = 'succeeded' and command_id is not null")
+        .all(failedRunId) as Array<{ commandId: string }>).map((row) => row.commandId),
+    );
+    return this.runPipelineInternal(
+      failedRun.pipelineId,
+      parseJsonObject(failedRun.parameters),
+      emit,
+      {
+        initialOutputContext: parseJsonObject(failedRun.contextSnapshot) as OutputContext,
+        skipCommandIds: succeededCommandIds,
+      },
+    );
+  }
+
+  private async runPipelineInternal(
+    pipelineId: number,
+    parameters: Record<string, unknown>,
+    emit: (event: ExecutionEvent) => void,
+    resume?: { initialOutputContext: OutputContext; skipCommandIds: Set<string> },
+  ): Promise<RunRecord> {
     if (this.runningPipelineIds.has(pipelineId)) {
       throw new PipelineAlreadyRunningError(pipelineId);
     }
     this.runningPipelineIds.add(pipelineId);
-    const runId = this.createRun(pipelineId);
+    const controller = new AbortController();
+    const runId = this.createRun(pipelineId, parameters);
+    this.runningRuns.set(runId, { controller, pipelineId });
     emit({ type: 'run-status', runId, status: 'pending' });
     this.markRunRunning(runId);
     emit({ type: 'run-status', runId, status: 'running' });
@@ -47,7 +96,7 @@ export class PipelineEngine {
       const graph = this.pipelines.getPipelineGraph(pipelineId);
       const unitNames = new Map(graph.units.map((unit) => [unit.id, unit.name]));
       const schedule = buildSchedule(graph.units.map((unit) => unit.id), graph.edges);
-      let outputContext: OutputContext = {};
+      let outputContext: OutputContext = resume?.initialOutputContext ?? {};
       let runStatus: RunStatus = 'succeeded';
       const unitStatuses = new Map<string, UnitExecutionStatus>();
 
@@ -56,7 +105,7 @@ export class PipelineEngine {
         const inputContext = outputContext;
         const runUnit = hasFailedPredecessor(unitId, schedule.predecessors, unitStatuses)
           ? Promise.resolve(this.skipUnit(runId, unitId, emit))
-          : this.executeUnit(runId, unitId, unitNames.get(unitId) ?? unitId, inputContext, parameters, emit);
+          : this.executeUnit(runId, unitId, unitNames.get(unitId) ?? unitId, inputContext, parameters, emit, controller.signal, resume?.skipCommandIds ?? new Set());
         runningUnits.set(unitId, runUnit);
       };
 
@@ -69,8 +118,14 @@ export class PipelineEngine {
         runningUnits.delete(result.unitId);
         unitStatuses.set(result.unitId, result.status);
         outputContext = mergeOutputContext(outputContext, result.outputs);
+        if (controller.signal.aborted) {
+          runStatus = 'cancelled';
+        }
         if (result.status === 'failed' || result.status === 'skipped') {
-          runStatus = 'failed';
+          runStatus = controller.signal.aborted ? 'cancelled' : 'failed';
+        }
+        if (controller.signal.aborted) {
+          continue;
         }
         for (const nextUnit of schedule.successors.get(result.unitId) ?? []) {
           schedule.remainingPredecessors.set(nextUnit, schedule.remainingPredecessors.get(nextUnit)! - 1);
@@ -80,11 +135,12 @@ export class PipelineEngine {
         }
       }
 
-      this.finishRun(runId, runStatus, started);
+      this.finishRun(runId, runStatus, started, outputContext);
       emit({ type: 'run-status', runId, status: runStatus });
-      return { id: runId, pipelineId, status: runStatus };
+      return { id: runId, pipelineId, status: runStatus, parameters };
     } finally {
       await Promise.allSettled([this.localExecutor.closeSessions?.(runId), this.remoteExecutor?.closeSessions?.(runId)]);
+      this.runningRuns.delete(runId);
       this.runningPipelineIds.delete(pipelineId);
     }
   }
@@ -96,12 +152,22 @@ export class PipelineEngine {
     inputContext: OutputContext,
     parameters: Record<string, unknown>,
     emit: (event: ExecutionEvent) => void,
+    signal: AbortSignal,
+    skipCommandIds: Set<string>,
   ): Promise<UnitExecutionResult> {
     const unitCommands = this.commands.listCommands(unitId);
     let outputContext: OutputContext = {};
     let skipRestOfUnit = false;
     for (const command of unitCommands) {
+      if (signal.aborted) {
+        return { unitId, status: 'failed', outputs: outputContext };
+      }
       if (skipRestOfUnit) {
+        this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
+        emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
+        continue;
+      }
+      if (skipCommandIds.has(command.id)) {
         this.recordCommandResult(runId, command, 'skipped', '', '', null, 0);
         emit({ type: 'command-status', runId, commandId: command.id, status: 'skipped' });
         continue;
@@ -113,8 +179,12 @@ export class PipelineEngine {
         mergeOutputContext(inputContext, outputContext),
         parameters,
         emit,
+        signal,
       );
       outputContext = storeOutputs(outputContext, unitName, command.config.name, result.outputs);
+      if (signal.aborted) {
+        return { unitId, status: 'failed', outputs: outputContext };
+      }
       if (result.exitCode !== 0) {
         const onFailure = command.type === 'shell' ? command.config.onFailure : 'stop';
         if (onFailure === 'stop') {
@@ -136,6 +206,7 @@ export class PipelineEngine {
     outputContext: OutputContext,
     parameters: Record<string, unknown>,
     emit: (event: ExecutionEvent) => void,
+    signal: AbortSignal,
   ) {
     const started = Date.now();
     let command = originalCommand;
@@ -169,13 +240,13 @@ export class PipelineEngine {
       command.type === 'shell' && command.config.reuseSession && command.config.sessionName
         ? (emitOutput: Parameters<LocalCommandExecutor['execute']>[1]) =>
             executor.executeInSession
-              ? executor.executeInSession(runId, command.config.sessionName!, command, emitOutput)
-              : executor.execute(command, emitOutput)
+              ? executor.executeInSession(runId, command.config.sessionName!, command, emitOutput, { runId, signal })
+              : executor.execute(command, emitOutput, { runId, signal })
         : command.type === 'shell' && command.config.reuseSession
           ? () => {
               throw new Error('Shell session name is required when reuseSession is enabled');
             }
-        : (emitOutput: Parameters<LocalCommandExecutor['execute']>[1]) => executor.execute(command, emitOutput);
+        : (emitOutput: Parameters<LocalCommandExecutor['execute']>[1]) => executor.execute(command, emitOutput, { runId, signal });
     const result = await Promise.resolve()
       .then(() =>
         execute((streamEvent) => {
@@ -203,10 +274,10 @@ export class PipelineEngine {
     return { ...result, outputs };
   }
 
-  private createRun(pipelineId: number) {
+  private createRun(pipelineId: number, parameters: Record<string, unknown>) {
     const result = this.db
-      .prepare("insert into runs (pipeline_id, status, started_at) values (?, 'pending', current_timestamp)")
-      .run(pipelineId);
+      .prepare("insert into runs (pipeline_id, status, started_at, parameters) values (?, 'pending', current_timestamp, ?)")
+      .run(pipelineId, JSON.stringify(parameters));
     return Number(result.lastInsertRowid);
   }
 
@@ -214,10 +285,10 @@ export class PipelineEngine {
     this.db.prepare("update runs set status = 'running' where id = ?").run(runId);
   }
 
-  private finishRun(runId: number, status: RunStatus, started: number) {
+  private finishRun(runId: number, status: RunStatus, started: number, contextSnapshot: OutputContext) {
     this.db
-      .prepare('update runs set status = ?, completed_at = current_timestamp, duration_ms = ? where id = ?')
-      .run(status, Date.now() - started, runId);
+      .prepare('update runs set status = ?, completed_at = current_timestamp, duration_ms = ?, context_snapshot = ? where id = ?')
+      .run(status, Date.now() - started, JSON.stringify(contextSnapshot), runId);
   }
 
   private recordCommandResult(
@@ -335,4 +406,13 @@ function mergeOutputContext(left: OutputContext, right: OutputContext): OutputCo
     merged[unitName] = { ...(merged[unitName] ?? {}), ...commands };
   }
   return merged;
+}
+
+function parseJsonObject(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }

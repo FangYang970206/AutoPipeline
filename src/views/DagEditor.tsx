@@ -40,6 +40,7 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [commandOutputs, setCommandOutputs] = useState<Record<string, CommandOutput>>({});
+  const [activeRunParameters, setActiveRunParameters] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
     setParameters(pipeline.parameters ?? []);
@@ -127,23 +128,53 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
     setMessage('DAG 已保存');
   }
 
-  async function runPipeline() {
+  async function runPipeline(defaultValues: Record<string, unknown> = {}) {
     if (!runsApi) {
       setMessage('IPC bridge unavailable');
       return;
     }
+    const values = collectParameterValues(parameters, defaultValues);
     setActiveRunId(null);
     setRunStatus('pending');
     setCommandOutputs({});
+    setActiveRunParameters(values);
     setMessage('Pipeline 运行中');
     try {
-      const run = await runsApi.start(pipeline.id, collectParameterValues(parameters));
+      const run = await runsApi.start(pipeline.id, values);
       setActiveRunId(run.id);
       setRunStatus(run.status);
+      setActiveRunParameters(run.parameters ?? values);
       setMessage(run.status === 'succeeded' ? 'Pipeline 运行成功' : 'Pipeline 运行失败');
     } catch (error) {
       setRunStatus('failed');
       setMessage(error instanceof Error ? error.message : 'Pipeline 运行失败');
+    }
+  }
+
+  async function cancelRun() {
+    if (!runsApi || activeRunId === null) {
+      return;
+    }
+    await runsApi.cancel(activeRunId);
+    setMessage('Cancel requested');
+  }
+
+  async function resumeRun() {
+    if (!runsApi || activeRunId === null) {
+      return;
+    }
+    setRunStatus('pending');
+    setCommandOutputs({});
+    setMessage('Resuming run');
+    try {
+      const run = await runsApi.resume(activeRunId);
+      setActiveRunId(run.id);
+      setRunStatus(run.status);
+      setActiveRunParameters(run.parameters ?? activeRunParameters);
+      setMessage(run.status === 'succeeded' ? 'Resume succeeded' : 'Resume failed');
+    } catch (error) {
+      setRunStatus('failed');
+      setMessage(error instanceof Error ? error.message : 'Resume failed');
     }
   }
 
@@ -248,7 +279,14 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
       </p>
       <ParameterEditor parameters={parameters} onChange={setParameters} onSave={() => void saveParameters()} />
       <ShellSessionEditor shellSessions={shellSessions} onChange={setShellSessions} onSave={() => void saveShellSessions()} />
-      <RunViewer commandOutputs={commandOutputs} runId={activeRunId} status={runStatus} />
+      <RunViewer
+        commandOutputs={commandOutputs}
+        onCancel={() => void cancelRun()}
+        onRerun={() => void runPipeline(activeRunParameters)}
+        onResume={() => void resumeRun()}
+        runId={activeRunId}
+        status={runStatus}
+      />
       </div>
       {selectedUnit ? <CommandPanel shellSessions={shellSessions} unitId={selectedUnit.id} unitName={selectedUnit.name} /> : null}
     </section>
@@ -361,10 +399,16 @@ function ParameterEditor({
 
 function RunViewer({
   commandOutputs,
+  onCancel,
+  onRerun,
+  onResume,
   runId,
   status,
 }: {
   commandOutputs: Record<string, CommandOutput>;
+  onCancel: () => void;
+  onRerun: () => void;
+  onResume: () => void;
   runId: number | null;
   status: RunStatus | null;
 }) {
@@ -377,9 +421,26 @@ function RunViewer({
     <div className="border-t border-border bg-slate-900 px-3 py-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-white">运行输出</h3>
+        <div className="flex items-center gap-2">
         <span className="text-xs text-slate-400">
           {runId ? `Run #${runId}` : '等待启动'} · {status ?? 'pending'}
         </span>
+          {runId && (status === 'running' || status === 'pending') ? (
+            <Button onClick={onCancel} type="button" variant="ghost">
+              Cancel
+            </Button>
+          ) : null}
+          {runId && status === 'failed' ? (
+            <Button onClick={onResume} type="button" variant="ghost">
+              Resume
+            </Button>
+          ) : null}
+          {runId && status !== 'running' && status !== 'pending' ? (
+            <Button onClick={onRerun} type="button" variant="ghost">
+              Re-run
+            </Button>
+          ) : null}
+        </div>
       </div>
       <div className="max-h-56 space-y-2 overflow-auto">
         {entries.map(([commandId, output]) => (
@@ -410,19 +471,21 @@ function RunViewer({
   );
 }
 
-function collectParameterValues(parameters: PipelineParameter[]) {
+function collectParameterValues(parameters: PipelineParameter[], defaultValues: Record<string, unknown> = {}) {
   return Object.fromEntries(
     parameters.map((parameter) => {
+      const defaultValue = defaultValues[parameter.name] ?? parameter.defaultValue;
       if (parameter.type === 'boolean') {
-        return [parameter.name, window.confirm(`${parameter.name}?`)];
+        const suffix = defaultValues[parameter.name] === undefined ? '' : ` Previous: ${String(defaultValue)}`;
+        return [parameter.name, window.confirm(`${parameter.name}?${suffix}`)];
       }
-      const value = window.prompt(parameter.name, String(parameter.defaultValue));
-      return [parameter.name, coerceParameterValue(parameter.type, value ?? parameter.defaultValue)];
+      const value = window.prompt(parameter.name, String(defaultValue));
+      return [parameter.name, coerceParameterValue(parameter.type, value ?? defaultValue)];
     }),
   );
 }
 
-function coerceParameterValue(type: PipelineParameter['type'], value: string | number | boolean) {
+function coerceParameterValue(type: PipelineParameter['type'], value: unknown) {
   if (type === 'number') {
     return Number(value);
   }

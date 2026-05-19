@@ -5,7 +5,7 @@ import type { LocalCommandExecutor } from './types.js';
 export class LocalShellExecutor implements LocalCommandExecutor {
   private readonly sessions = new Map<number, Map<string, LocalShellSession>>();
 
-  async execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1]) {
+  async execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1], options?: Parameters<LocalCommandExecutor['execute']>[2]) {
     if (command.type !== 'shell') {
       throw new Error(`Unsupported local command type: ${command.type}`);
     }
@@ -21,17 +21,26 @@ export class LocalShellExecutor implements LocalCommandExecutor {
       });
       let settled = false;
       let timedOut = false;
+      let forceKill: NodeJS.Timeout | undefined;
+      const interrupt = () => {
+        child.kill('SIGINT');
+        forceKill = setTimeout(() => {
+          if (!settled) {
+            child.kill('SIGKILL');
+          }
+        }, 3000);
+        forceKill.unref();
+      };
       const timeout = command.config.timeout
         ? setTimeout(() => {
             timedOut = true;
-            child.kill('SIGINT');
-            setTimeout(() => {
-              if (!settled) {
-                child.kill('SIGKILL');
-              }
-            }, 3000).unref();
+            interrupt();
           }, command.config.timeout * 1000)
         : undefined;
+      options?.signal.addEventListener('abort', interrupt, { once: true });
+      if (options?.signal.aborted) {
+        interrupt();
+      }
 
       child.stdout.on('data', (chunk: Buffer) => emit({ type: 'stdout', data: chunk.toString('utf8') }));
       child.stderr.on('data', (chunk: Buffer) => emit({ type: 'stderr', data: chunk.toString('utf8') }));
@@ -41,6 +50,8 @@ export class LocalShellExecutor implements LocalCommandExecutor {
         }
         settled = true;
         clearTimeout(timeout);
+        clearTimeout(forceKill);
+        options?.signal.removeEventListener('abort', interrupt);
         emit({ type: 'stderr', data: error.message });
         resolve({ exitCode: 1 });
       });
@@ -50,6 +61,8 @@ export class LocalShellExecutor implements LocalCommandExecutor {
         }
         settled = true;
         clearTimeout(timeout);
+        clearTimeout(forceKill);
+        options?.signal.removeEventListener('abort', interrupt);
         resolve({ exitCode: timedOut ? 124 : (code ?? 1) });
       });
     });
@@ -60,6 +73,7 @@ export class LocalShellExecutor implements LocalCommandExecutor {
     sessionName: string,
     command: CommandRecord,
     emit: Parameters<LocalCommandExecutor['execute']>[1],
+    options?: Parameters<LocalCommandExecutor['execute']>[2],
   ) {
     if (command.type !== 'shell') {
       throw new Error(`Unsupported local command type: ${command.type}`);
@@ -80,14 +94,14 @@ export class LocalShellExecutor implements LocalCommandExecutor {
       runSessions.set(sessionName, session);
     }
     try {
-      return await session.execute(command, emit);
+      return await session.execute(command, emit, options?.signal);
     } catch (error) {
       if (!(error instanceof SessionClosedError)) {
         throw error;
       }
       session = new LocalShellSession(command.config.shellType);
       runSessions.set(sessionName, session);
-      return session.execute(command, emit);
+      return session.execute(command, emit, options?.signal);
     }
   }
 
@@ -124,8 +138,8 @@ class LocalShellSession {
     });
   }
 
-  execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1]) {
-    const run = this.queue.then(() => this.runCommand(command, emit));
+  execute(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1], signal?: AbortSignal) {
+    const run = this.queue.then(() => this.runCommand(command, emit, signal));
     this.queue = run.then(
       () => undefined,
       () => undefined,
@@ -133,14 +147,14 @@ class LocalShellSession {
     return run;
   }
 
-  close() {
+  close(signal: NodeJS.Signals = 'SIGTERM') {
     this.isClosed = true;
     if (!this.child.killed) {
-      this.child.kill();
+      this.child.kill(signal);
     }
   }
 
-  private runCommand(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1]) {
+  private runCommand(command: CommandRecord, emit: Parameters<LocalCommandExecutor['execute']>[1], signal?: AbortSignal) {
     if (command.type !== 'shell') {
       throw new Error(`Unsupported local command type: ${command.type}`);
     }
@@ -153,12 +167,26 @@ class LocalShellSession {
     let settled = false;
 
     return new Promise<{ exitCode: number }>((resolve) => {
+      let forceClose: NodeJS.Timeout | undefined;
       const timeout = command.config.timeout
         ? setTimeout(() => {
-            finish(124);
+          finish(124);
             this.close();
           }, command.config.timeout * 1000)
         : undefined;
+      const interrupt = () => {
+        this.child.kill('SIGINT');
+        forceClose = setTimeout(() => {
+          if (!settled) {
+            this.close('SIGKILL');
+          }
+        }, 3000);
+        forceClose.unref();
+      };
+      signal?.addEventListener('abort', interrupt, { once: true });
+      if (signal?.aborted) {
+        interrupt();
+      }
 
       const finish = (exitCode: number) => {
         if (settled) {
@@ -166,6 +194,8 @@ class LocalShellSession {
         }
         settled = true;
         clearTimeout(timeout);
+        clearTimeout(forceClose);
+        signal?.removeEventListener('abort', interrupt);
         this.child.stdout.off('data', onStdout);
         this.child.stderr.off('data', onStderr);
         this.child.off('error', onError);

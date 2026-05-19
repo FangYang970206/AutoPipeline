@@ -84,6 +84,8 @@ describe('preload contract', () => {
       },
       runs: {
         start: async () => ({ id: 1, pipelineId: 1, status: 'succeeded' }),
+        cancel: async () => undefined,
+        resume: async () => ({ id: 2, pipelineId: 1, status: 'succeeded' }),
         onEvent: () => () => undefined,
       },
     } satisfies AutoPipelineApi;

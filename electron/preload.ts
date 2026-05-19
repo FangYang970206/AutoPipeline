@@ -35,6 +35,8 @@ interface AutoPipelineApi {
   };
   runs: {
     start: (pipelineId: number, parameters?: unknown) => Promise<unknown>;
+    cancel: (runId: number) => Promise<void>;
+    resume: (runId: number) => Promise<unknown>;
     onEvent: (callback: (event: unknown) => void) => () => void;
   };
 }
@@ -74,6 +76,8 @@ const api: AutoPipelineApi = {
   },
   runs: {
     start: (pipelineId, parameters) => ipcRenderer.invoke('runs:start', pipelineId, parameters),
+    cancel: (runId) => ipcRenderer.invoke('runs:cancel', runId) as Promise<void>,
+    resume: (runId) => ipcRenderer.invoke('runs:resume', runId),
     onEvent: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
       ipcRenderer.on('runs:event', listener);

@@ -29,4 +29,10 @@ export function registerExecutionHandlers() {
       event.sender.send('runs:event', payload);
     }),
   );
+  ipcMain.handle('runs:cancel', (_event, runId: number) => engine.cancelRun(runId));
+  ipcMain.handle('runs:resume', (event, runId: number) =>
+    engine.resumeRun(runId, (payload) => {
+      event.sender.send('runs:event', payload);
+    }),
+  );
 }

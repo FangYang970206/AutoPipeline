@@ -122,6 +122,117 @@ describe('PipelineEngine', () => {
     await firstRun;
   });
 
+  it('cancels an active run and signals the running command', async () => {
+    let runId!: number;
+    let commandSignal: AbortSignal | undefined;
+    let markStarted!: () => void;
+    const commandStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const { commands, db, engine, pipeline } = setup({
+      execute: async (_command, _emit, options) => {
+        commandSignal = options?.signal;
+        runId = options?.runId ?? 0;
+        markStarted();
+        await new Promise<void>((resolveCommand) => {
+          commandSignal?.addEventListener('abort', () => resolveCommand(), { once: true });
+        });
+        return { exitCode: 130 };
+      },
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    const running = engine.runPipeline(pipeline.id);
+    await commandStarted;
+    await engine.cancelRun(runId);
+    const run = await running;
+
+    expect(run.status).toBe('cancelled');
+    expect(db.prepare('select status from runs where id = ?').get(runId)).toEqual({ status: 'cancelled' });
+    expect(commandSignal?.aborted).toBe(true);
+  });
+
+  it('does not start additional commands after cancellation even when the active command exits cleanly', async () => {
+    let runId!: number;
+    let commandSignal: AbortSignal | undefined;
+    let markStarted!: () => void;
+    const commandStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const executed: string[] = [];
+    const { commands, engine, pipeline } = setup({
+      execute: async (command, _emit, options) => {
+        executed.push(command.config.name);
+        commandSignal = options?.signal;
+        runId = options?.runId ?? 0;
+        markStarted();
+        await new Promise<void>((resolveCommand) => {
+          commandSignal?.addEventListener('abort', () => resolveCommand(), { once: true });
+        });
+        return { exitCode: 0 };
+      },
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+      { id: 'cmd-package', type: 'shell', order: 1, config: { name: 'Package', script: 'package', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-b', [
+      { id: 'cmd-deploy', type: 'shell', order: 0, config: { name: 'Deploy', script: 'deploy', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    const running = engine.runPipeline(pipeline.id);
+    await commandStarted;
+    await engine.cancelRun(runId);
+    const run = await running;
+
+    expect(run.status).toBe('cancelled');
+    expect(executed).toEqual(['Build']);
+  });
+
+  it('resumes a failed run with restored outputs and current pipeline definition', async () => {
+    const executedScripts: string[] = [];
+    const { commands, db, engine, pipeline } = setup({
+      execute: async (command, emit) => {
+        if (command.type !== 'shell') {
+          return { exitCode: 1 };
+        }
+        executedScripts.push(command.config.script);
+        if (command.config.name === 'Build') {
+          emit({ type: 'stdout', data: '::set-output name=artifact::dist/app.zip\n' });
+          return { exitCode: 0 };
+        }
+        return { exitCode: command.config.script.includes('fixed') ? 0 : 1 };
+      },
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: '::set-output name=artifact::dist/app.zip', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-b', [
+      { id: 'cmd-deploy', type: 'shell', order: 1, config: { name: 'Deploy', script: 'deploy {{Build.Build.artifact}} broken', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    const failedRun = await engine.runPipeline(pipeline.id, { env: 'prod' });
+    expect(failedRun.status).toBe('failed');
+
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: '::set-output name=artifact::dist/app.zip\ncurrent', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    commands.saveCommands('unit-b', [
+      { id: 'cmd-deploy', type: 'shell', order: 1, config: { name: 'Deploy', script: 'deploy {{Build.Build.artifact}} fixed', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    const resumedRun = await engine.resumeRun(failedRun.id);
+
+    expect(resumedRun.status).toBe('succeeded');
+    expect(executedScripts).toEqual(['::set-output name=artifact::dist/app.zip', 'deploy dist/app.zip broken', 'deploy dist/app.zip fixed']);
+    expect(db.prepare('select command_id, status from command_results where run_id = ? order by id').all(resumedRun.id)).toEqual([
+      { command_id: 'cmd-build', status: 'skipped' },
+      { command_id: 'cmd-deploy', status: 'succeeded' },
+    ]);
+    expect(db.prepare('select parameters from runs where id = ?').get(resumedRun.id)).toEqual({ parameters: '{"env":"prod"}' });
+  });
+
   it('allows different pipelines to run concurrently', async () => {
     const releases: Array<() => void> = [];
     let started = 0;

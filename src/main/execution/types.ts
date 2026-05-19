@@ -7,6 +7,7 @@ export interface RunRecord {
   id: number;
   pipelineId: number;
   status: RunStatus;
+  parameters?: Record<string, unknown>;
 }
 
 export type ExecutionEvent =
@@ -23,16 +24,23 @@ export interface CommandExecutionResult {
   summary?: unknown;
 }
 
+export interface CommandExecutionOptions {
+  runId: number;
+  signal: AbortSignal;
+}
+
 export interface LocalCommandExecutor {
   execute: (
     command: CommandRecord,
     emit: (event: CommandOutputEvent) => void,
+    options?: CommandExecutionOptions,
   ) => Promise<CommandExecutionResult>;
   executeInSession?: (
     runId: number,
     sessionName: string,
     command: CommandRecord,
     emit: (event: CommandOutputEvent) => void,
+    options?: CommandExecutionOptions,
   ) => Promise<CommandExecutionResult>;
   closeSessions?: (runId: number) => Promise<void>;
 }
