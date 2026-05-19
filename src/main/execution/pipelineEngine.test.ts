@@ -233,6 +233,89 @@ describe('PipelineEngine', () => {
     expect(db.prepare('select parameters from runs where id = ?').get(resumedRun.id)).toEqual({ parameters: '{"env":"prod"}' });
   });
 
+  it('captures run history with pipeline and context snapshots', async () => {
+    const { commands, engine, pipeline } = setup({
+      execute: async (_command, emit) => {
+        emit({ type: 'stdout', data: '::set-output name=artifact::dist/app.zip\n' });
+        return { exitCode: 0 };
+      },
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: '::set-output name=artifact::dist/app.zip', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    const run = await engine.runPipeline(pipeline.id, { env: 'prod' });
+    const history = engine.listRuns(pipeline.id);
+    const snapshot = engine.getRunSnapshot(run.id);
+
+    expect(history[0]).toMatchObject({ id: run.id, pipelineId: pipeline.id, status: 'succeeded', parameters: { env: 'prod' } });
+    expect(snapshot.pipelineSnapshot).toMatchObject({
+      pipeline: { name: 'Deploy API' },
+      units: [
+        expect.objectContaining({
+          id: 'unit-a',
+          commands: [expect.objectContaining({ id: 'cmd-build' })],
+        }),
+        expect.objectContaining({ id: 'unit-b', commands: [] }),
+      ],
+    });
+    expect(snapshot.contextSnapshot).toEqual({ Build: { Build: { artifact: 'dist/app.zip' } } });
+  });
+
+  it('retains only the latest 100 runs per pipeline', async () => {
+    const { commands, db, engine, pipeline } = setup({
+      execute: async () => ({ exitCode: 0 }),
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+
+    for (let index = 0; index < 101; index += 1) {
+      await engine.runPipeline(pipeline.id, { index });
+    }
+
+    expect(db.prepare('select count(*) as count from runs where pipeline_id = ?').get(pipeline.id)).toEqual({ count: 100 });
+    expect(db.prepare('select count(*) as count from command_results').get()).toEqual({ count: 100 });
+  });
+
+  it('cleans up runs older than the retention window and cascades command results', async () => {
+    const { commands, db, engine, pipeline } = setup({
+      execute: async () => ({ exitCode: 0 }),
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    const oldRun = await engine.runPipeline(pipeline.id, { age: 'old' });
+    const freshRun = await engine.runPipeline(pipeline.id, { age: 'fresh' });
+    db.prepare("update runs set completed_at = datetime('now', '-31 days') where id = ?").run(oldRun.id);
+
+    engine.updateRetentionSettings({ maxDays: 30, maxCount: 100 });
+
+    expect(db.prepare('select id from runs order by id').all()).toEqual([{ id: freshRun.id }]);
+    expect(db.prepare('select run_id as runId from command_results order by id').all()).toEqual([{ runId: freshRun.id }]);
+  });
+
+  it('releases the pipeline running lock when snapshot creation fails', async () => {
+    const { commands, db, engine, pipeline, pipelines } = setup({
+      execute: async () => ({ exitCode: 0 }),
+    });
+    commands.saveCommands('unit-a', [
+      { id: 'cmd-build', type: 'shell', order: 0, config: { name: 'Build', script: 'build', serverId: null, shellType: 'cmd', onFailure: 'stop' } },
+    ]);
+    db.prepare('update pipelines set dag_edges = ? where id = ?').run('not-json', pipeline.id);
+
+    await expect(engine.runPipeline(pipeline.id)).rejects.toThrow();
+
+    pipelines.savePipelineGraph(pipeline.id, {
+      units: [
+        { id: 'unit-a', name: 'Build', position: { x: 0, y: 0 } },
+        { id: 'unit-b', name: 'Deploy', position: { x: 200, y: 0 } },
+      ],
+      edges: [{ source: 'unit-a', target: 'unit-b' }],
+    });
+    await expect(engine.runPipeline(pipeline.id)).resolves.toMatchObject({ status: 'succeeded' });
+  });
+
   it('allows different pipelines to run concurrently', async () => {
     const releases: Array<() => void> = [];
     let started = 0;

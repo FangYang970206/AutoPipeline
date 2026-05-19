@@ -3,7 +3,7 @@ import type { CommandRepository } from '../command/commandRepository.js';
 import type { CommandRecord } from '../command/types.js';
 import type { PipelineRepository } from '../pipeline/pipelineRepository.js';
 import { parseNamedOutputs, storeOutputs, substituteTemplate, type NamedOutputs, type OutputContext } from './namedOutputs.js';
-import type { ExecutionEvent, LocalCommandExecutor, RunRecord, RunStatus } from './types.js';
+import type { ExecutionEvent, LocalCommandExecutor, RunRecord, RunSnapshotRecord, RunStatus } from './types.js';
 
 export type { LocalCommandExecutor } from './types.js';
 
@@ -43,6 +43,75 @@ export class PipelineEngine {
       return;
     }
     running.controller.abort();
+  }
+
+  listRuns(pipelineId: number): RunRecord[] {
+    return (this.db
+      .prepare(
+        `select id, pipeline_id as pipelineId, status, started_at as startedAt,
+                completed_at as completedAt, duration_ms as durationMs, parameters
+           from runs
+          where pipeline_id = ?
+          order by coalesce(started_at, created_at) desc, id desc`,
+      )
+      .all(pipelineId) as Array<RunRecord & { parameters: string; status: RunStatus }>).map((row) => ({
+        id: row.id,
+        pipelineId: row.pipelineId,
+        status: row.status,
+        startedAt: row.startedAt,
+        completedAt: row.completedAt,
+        durationMs: row.durationMs,
+        parameters: parseJsonObject(row.parameters),
+      }));
+  }
+
+  getRunSnapshot(runId: number): RunSnapshotRecord {
+    const row = this.db
+      .prepare(
+        `select id, pipeline_id as pipelineId, status, pipeline_snapshot as pipelineSnapshot,
+                context_snapshot as contextSnapshot
+           from runs
+          where id = ?`,
+      )
+      .get(runId) as { id: number; pipelineId: number; status: RunStatus; pipelineSnapshot: string; contextSnapshot: string } | undefined;
+    if (!row) {
+      throw new Error(`Run ${runId} was not found`);
+    }
+    return {
+      id: row.id,
+      pipelineId: row.pipelineId,
+      status: row.status,
+      pipelineSnapshot: parseJsonObject(row.pipelineSnapshot),
+      contextSnapshot: parseJsonObject(row.contextSnapshot),
+    };
+  }
+
+  getRetentionSettings() {
+    const row = this.db.prepare("select value from app_settings where key = 'runRetention'").get() as { value: string } | undefined;
+    return { maxDays: 30, maxCount: 100, ...parseJsonObject(row?.value ?? '{}') } as { maxDays: number; maxCount: number };
+  }
+
+  updateRetentionSettings(settings: { maxDays: number; maxCount: number }) {
+    const next = {
+      maxDays: normalizePositiveInteger(settings.maxDays, 30),
+      maxCount: normalizePositiveInteger(settings.maxCount, 100),
+    };
+    this.db
+      .prepare(
+        `insert into app_settings (key, value) values ('runRetention', ?)
+         on conflict(key) do update set value = excluded.value`,
+      )
+      .run(JSON.stringify(next));
+    this.cleanupAllRunRetention();
+    return next;
+  }
+
+  cleanupAllRunRetention() {
+    const pipelineIds = this.db.prepare('select id from pipelines').all() as Array<{ id: number }>;
+    const settings = this.getRetentionSettings();
+    for (const pipeline of pipelineIds) {
+      this.cleanupRunRetention(pipeline.id, settings);
+    }
   }
 
   async resumeRun(
@@ -85,14 +154,16 @@ export class PipelineEngine {
     }
     this.runningPipelineIds.add(pipelineId);
     const controller = new AbortController();
-    const runId = this.createRun(pipelineId, parameters);
-    this.runningRuns.set(runId, { controller, pipelineId });
-    emit({ type: 'run-status', runId, status: 'pending' });
-    this.markRunRunning(runId);
-    emit({ type: 'run-status', runId, status: 'running' });
-    const started = Date.now();
+    let runId: number | undefined;
 
     try {
+      runId = this.createRun(pipelineId, parameters);
+      const activeRunId = runId;
+      this.runningRuns.set(activeRunId, { controller, pipelineId });
+      emit({ type: 'run-status', runId: activeRunId, status: 'pending' });
+      this.markRunRunning(activeRunId);
+      emit({ type: 'run-status', runId: activeRunId, status: 'running' });
+      const started = Date.now();
       const graph = this.pipelines.getPipelineGraph(pipelineId);
       const unitNames = new Map(graph.units.map((unit) => [unit.id, unit.name]));
       const schedule = buildSchedule(graph.units.map((unit) => unit.id), graph.edges);
@@ -104,8 +175,8 @@ export class PipelineEngine {
       const startUnit = (unitId: string) => {
         const inputContext = outputContext;
         const runUnit = hasFailedPredecessor(unitId, schedule.predecessors, unitStatuses)
-          ? Promise.resolve(this.skipUnit(runId, unitId, emit))
-          : this.executeUnit(runId, unitId, unitNames.get(unitId) ?? unitId, inputContext, parameters, emit, controller.signal, resume?.skipCommandIds ?? new Set());
+          ? Promise.resolve(this.skipUnit(activeRunId, unitId, emit))
+          : this.executeUnit(activeRunId, unitId, unitNames.get(unitId) ?? unitId, inputContext, parameters, emit, controller.signal, resume?.skipCommandIds ?? new Set());
         runningUnits.set(unitId, runUnit);
       };
 
@@ -135,12 +206,15 @@ export class PipelineEngine {
         }
       }
 
-      this.finishRun(runId, runStatus, started, outputContext);
-      emit({ type: 'run-status', runId, status: runStatus });
-      return { id: runId, pipelineId, status: runStatus, parameters };
+      this.finishRun(activeRunId, runStatus, started, outputContext);
+      this.cleanupRunRetention(pipelineId, this.getRetentionSettings());
+      emit({ type: 'run-status', runId: activeRunId, status: runStatus });
+      return { id: activeRunId, pipelineId, status: runStatus, parameters };
     } finally {
-      await Promise.allSettled([this.localExecutor.closeSessions?.(runId), this.remoteExecutor?.closeSessions?.(runId)]);
-      this.runningRuns.delete(runId);
+      if (runId !== undefined) {
+        await Promise.allSettled([this.localExecutor.closeSessions?.(runId), this.remoteExecutor?.closeSessions?.(runId)]);
+        this.runningRuns.delete(runId);
+      }
       this.runningPipelineIds.delete(pipelineId);
     }
   }
@@ -275,10 +349,55 @@ export class PipelineEngine {
   }
 
   private createRun(pipelineId: number, parameters: Record<string, unknown>) {
+    const snapshot = this.buildPipelineSnapshot(pipelineId);
     const result = this.db
-      .prepare("insert into runs (pipeline_id, status, started_at, parameters) values (?, 'pending', current_timestamp, ?)")
-      .run(pipelineId, JSON.stringify(parameters));
+      .prepare("insert into runs (pipeline_id, status, started_at, parameters, pipeline_snapshot) values (?, 'pending', current_timestamp, ?, ?)")
+      .run(pipelineId, JSON.stringify(parameters), JSON.stringify(snapshot));
     return Number(result.lastInsertRowid);
+  }
+
+  private buildPipelineSnapshot(pipelineId: number) {
+    const pipeline = this.db
+      .prepare('select id, name, folder_id as folderId, dag_edges as dagEdges, parameters, shell_sessions as shellSessions from pipelines where id = ?')
+      .get(pipelineId) as { id: number; name: string; folderId: number | null; dagEdges: string; parameters: string; shellSessions: string } | undefined;
+    if (!pipeline) {
+      throw new Error(`Pipeline not found: ${pipelineId}`);
+    }
+    const graph = this.pipelines.getPipelineGraph(pipelineId);
+    return {
+      pipeline: {
+        id: pipeline.id,
+        name: pipeline.name,
+        folderId: pipeline.folderId,
+        dagEdges: JSON.parse(pipeline.dagEdges) as unknown[],
+        parameters: JSON.parse(pipeline.parameters) as unknown[],
+        shellSessions: JSON.parse(pipeline.shellSessions) as unknown[],
+      },
+      units: graph.units.map((unit) => ({
+        ...unit,
+        commands: this.commands.listCommands(unit.id),
+      })),
+      edges: graph.edges,
+    };
+  }
+
+  private cleanupRunRetention(pipelineId: number, settings: { maxDays: number; maxCount: number }) {
+    this.db
+      .prepare("delete from runs where pipeline_id = ? and datetime(coalesce(completed_at, started_at, created_at)) < datetime('now', ?)")
+      .run(pipelineId, `-${settings.maxDays} days`);
+    const stale = this.db
+      .prepare(
+        `select id
+           from runs
+          where pipeline_id = ?
+          order by coalesce(started_at, created_at) desc, id desc
+          limit -1 offset ?`,
+      )
+      .all(pipelineId, settings.maxCount) as Array<{ id: number }>;
+    const remove = this.db.prepare('delete from runs where id = ?');
+    for (const run of stale) {
+      remove.run(run.id);
+    }
   }
 
   private markRunRunning(runId: number) {
@@ -415,4 +534,8 @@ function parseJsonObject(value: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number) {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
 }

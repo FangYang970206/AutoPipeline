@@ -19,6 +19,8 @@ import type {
   PipelineGraph,
   PipelineParameter,
   PipelineRecord,
+  RunRecord,
+  RunSnapshotRecord,
   RunStatus,
 } from '../types';
 import { CommandPanel } from './CommandPanel';
@@ -41,10 +43,13 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [commandOutputs, setCommandOutputs] = useState<Record<string, CommandOutput>>({});
   const [activeRunParameters, setActiveRunParameters] = useState<Record<string, unknown>>({});
+  const [runHistory, setRunHistory] = useState<RunRecord[]>([]);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<RunSnapshotRecord | null>(null);
 
   useEffect(() => {
     setParameters(pipeline.parameters ?? []);
     setShellSessions(pipeline.shellSessions ?? []);
+    setSelectedSnapshot(null);
   }, [pipeline.id, pipeline.parameters, pipeline.shellSessions]);
 
   useEffect(() => {
@@ -63,6 +68,10 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
     }
     return runsApi.onEvent((event) => handleExecutionEvent(event));
   }, [runsApi]);
+
+  useEffect(() => {
+    void refreshRunHistory();
+  }, [runsApi, pipeline.id]);
 
   const onConnect = useCallback<OnConnect>((connection) => setEdges((current) => addEdge(connection, current)), [setEdges]);
 
@@ -144,6 +153,7 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
       setActiveRunId(run.id);
       setRunStatus(run.status);
       setActiveRunParameters(run.parameters ?? values);
+      await refreshRunHistory();
       setMessage(run.status === 'succeeded' ? 'Pipeline 运行成功' : 'Pipeline 运行失败');
     } catch (error) {
       setRunStatus('failed');
@@ -171,6 +181,7 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
       setActiveRunId(run.id);
       setRunStatus(run.status);
       setActiveRunParameters(run.parameters ?? activeRunParameters);
+      await refreshRunHistory();
       setMessage(run.status === 'succeeded' ? 'Resume succeeded' : 'Resume failed');
     } catch (error) {
       setRunStatus('failed');
@@ -196,6 +207,20 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
     const updated = await api.updateShellSessions(pipeline.id, shellSessions);
     setShellSessions(updated.shellSessions);
     setMessage('Shell sessions saved');
+  }
+
+  async function refreshRunHistory() {
+    if (!runsApi) {
+      return;
+    }
+    setRunHistory(await runsApi.list(pipeline.id));
+  }
+
+  async function viewRunSnapshot(runId: number) {
+    if (!runsApi) {
+      return;
+    }
+    setSelectedSnapshot(await runsApi.snapshot(runId));
   }
 
   function handleExecutionEvent(event: ExecutionEvent) {
@@ -287,6 +312,7 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
         runId={activeRunId}
         status={runStatus}
       />
+      <RunHistory runs={runHistory} selectedSnapshot={selectedSnapshot} onViewSnapshot={(runId) => void viewRunSnapshot(runId)} />
       </div>
       {selectedUnit ? <CommandPanel shellSessions={shellSessions} unitId={selectedUnit.id} unitName={selectedUnit.name} /> : null}
     </section>
@@ -469,6 +495,80 @@ function RunViewer({
       </div>
     </div>
   );
+}
+
+function RunHistory({
+  onViewSnapshot,
+  runs,
+  selectedSnapshot,
+}: {
+  onViewSnapshot: (runId: number) => void;
+  runs: RunRecord[];
+  selectedSnapshot: RunSnapshotRecord | null;
+}) {
+  const snapshotGraph = toSnapshotGraph(selectedSnapshot?.pipelineSnapshot);
+  return (
+    <div className="border-t border-border bg-slate-900 px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-white">Run History</h3>
+        <span className="text-xs text-slate-400">{runs.length} runs</span>
+      </div>
+      <div className="grid max-h-48 gap-2 overflow-auto">
+        {runs.map((run) => (
+          <button
+            className="grid grid-cols-[80px_1fr_90px] items-center gap-2 rounded-md border border-border bg-slate-950 px-3 py-2 text-left text-xs text-slate-200 hover:border-accent"
+            key={run.id}
+            onClick={() => onViewSnapshot(run.id)}
+            type="button"
+          >
+            <span>{statusIcon(run.status)} #{run.id}</span>
+            <span>{run.startedAt ? new Date(run.startedAt).toLocaleString() : run.status}</span>
+            <span>{run.durationMs ?? 0}ms</span>
+          </button>
+        ))}
+      </div>
+      {selectedSnapshot ? (
+        <div className="mt-3 rounded-md border border-border bg-slate-950">
+          <div className="h-64">
+            <ReactFlow
+              edges={snapshotGraph.edges}
+              fitView
+              nodes={snapshotGraph.nodes}
+              nodesDraggable={false}
+              nodesConnectable={false}
+              elementsSelectable={false}
+              panOnDrag
+              zoomOnScroll
+            >
+              <Background />
+              <Controls />
+            </ReactFlow>
+          </div>
+          <pre className="max-h-40 overflow-auto border-t border-border p-3 text-xs text-slate-200">
+            {JSON.stringify({ contextSnapshot: selectedSnapshot.contextSnapshot }, null, 2)}
+          </pre>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function statusIcon(status: RunStatus) {
+  return status === 'succeeded' ? 'OK' : status === 'failed' ? 'FAIL' : status === 'cancelled' ? 'CXL' : 'RUN';
+}
+
+function toSnapshotGraph(snapshot: unknown): { nodes: UnitNode[]; edges: UnitEdge[] } {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { nodes: [], edges: [] };
+  }
+  const data = snapshot as {
+    units?: Array<{ id: string; name: string; position: { x: number; y: number } }>;
+    edges?: Array<{ source: string; target: string }>;
+  };
+  return {
+    nodes: (data.units ?? []).map((unit) => ({ id: unit.id, position: unit.position, data: { label: unit.name } })),
+    edges: (data.edges ?? []).map((edge, index) => ({ id: `snapshot-${edge.source}-${edge.target}-${index}`, source: edge.source, target: edge.target })),
+  };
 }
 
 function collectParameterValues(parameters: PipelineParameter[], defaultValues: Record<string, unknown> = {}) {

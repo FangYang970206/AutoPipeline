@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'react';
 import { FolderKanban, HardDrive, Server, Settings } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from './components/ui/button';
 import { useAppStore } from './store/appStore';
-import type { ViewId } from './types';
+import type { RunRetentionSettings, ViewId } from './types';
 import { PipelineManagement } from './views/PipelineManagement';
 import { ServerManagement } from './views/ServerManagement';
 
@@ -70,6 +71,8 @@ export function App() {
             <PipelineManagement />
           ) : activeView === 'servers' ? (
             <ServerManagement />
+          ) : activeView === 'settings' ? (
+            <SettingsPanel />
           ) : (
             <>
               <div className="max-w-3xl">
@@ -89,5 +92,63 @@ export function App() {
         </section>
       </main>
     </div>
+  );
+}
+
+function SettingsPanel() {
+  const api = window.autoPipeline?.settings;
+  const [retention, setRetention] = useState<RunRetentionSettings>({ maxDays: 30, maxCount: 100 });
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+    void api.getRetention().then(setRetention);
+  }, [api]);
+
+  async function save() {
+    if (!api) {
+      setMessage('IPC bridge unavailable');
+      return;
+    }
+    const saved = await api.updateRetention(retention);
+    setRetention(saved);
+    setMessage('Settings saved');
+  }
+
+  return (
+    <section className="max-w-3xl">
+      <h2 className="text-2xl font-semibold">Settings</h2>
+      <div className="mt-4 rounded-md border border-border bg-slate-900 p-4">
+        <h3 className="text-sm font-semibold text-white">Run retention</h3>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <label className="grid gap-1 text-sm text-slate-300">
+            Max days
+            <input
+              className="h-9 rounded-md border border-border bg-slate-950 px-3 text-sm text-white outline-none focus:border-accent"
+              min={1}
+              type="number"
+              value={retention.maxDays}
+              onChange={(event) => setRetention((current) => ({ ...current, maxDays: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="grid gap-1 text-sm text-slate-300">
+            Max count
+            <input
+              className="h-9 rounded-md border border-border bg-slate-950 px-3 text-sm text-white outline-none focus:border-accent"
+              min={1}
+              type="number"
+              value={retention.maxCount}
+              onChange={(event) => setRetention((current) => ({ ...current, maxCount: Number(event.target.value) }))}
+            />
+          </label>
+        </div>
+        <Button className="mt-3" onClick={() => void save()} type="button">
+          Save Settings
+        </Button>
+        <p aria-live="polite" className="mt-2 min-h-5 text-sm text-slate-300">{message}</p>
+      </div>
+    </section>
   );
 }

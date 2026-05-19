@@ -8,6 +8,17 @@ export interface RunRecord {
   pipelineId: number;
   status: RunStatus;
   parameters?: Record<string, unknown>;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+}
+
+export interface RunSnapshotRecord {
+  id: number;
+  pipelineId: number;
+  status: RunStatus;
+  pipelineSnapshot: unknown;
+  contextSnapshot: unknown;
 }
 
 export type ExecutionEvent =

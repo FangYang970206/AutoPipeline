@@ -89,6 +89,7 @@ describe('App shell', () => {
       pipelines: createPipelineApiMock(),
       commands: createCommandApiMock(),
       runs: createRunsApiMock(),
+      settings: createSettingsApiMock(),
     };
 
     render(<App />);
@@ -167,6 +168,7 @@ describe('App shell', () => {
       },
       commands: createCommandApiMock(),
       runs: createRunsApiMock(),
+      settings: createSettingsApiMock(),
     };
 
     render(<App />);
@@ -234,11 +236,14 @@ describe('App shell', () => {
         }),
         cancel: vi.fn().mockResolvedValue(undefined),
         resume: vi.fn().mockResolvedValue({ id: 8, pipelineId: 2, status: 'succeeded' }),
+        list: vi.fn().mockResolvedValue([]),
+        snapshot: vi.fn().mockResolvedValue({ id: 7, pipelineId: 2, status: 'succeeded', pipelineSnapshot: {}, contextSnapshot: {} }),
         onEvent: vi.fn().mockImplementation((callback) => {
           listeners.push(callback);
           return () => undefined;
         }),
       },
+      settings: createSettingsApiMock(),
     };
 
     render(<App />);
@@ -308,11 +313,14 @@ describe('App shell', () => {
         start,
         cancel,
         resume,
+        list: vi.fn().mockResolvedValue([]),
+        snapshot: vi.fn().mockResolvedValue({ id: 7, pipelineId: 2, status: 'failed', pipelineSnapshot: {}, contextSnapshot: {} }),
         onEvent: vi.fn().mockImplementation((callback) => {
           listeners.push(callback);
           return () => undefined;
         }),
       },
+      settings: createSettingsApiMock(),
     };
     vi.spyOn(window, 'prompt').mockReturnValue('prod');
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -396,6 +404,15 @@ function createRunsApiMock() {
     start: vi.fn().mockResolvedValue({ id: 1, pipelineId: 1, status: 'succeeded' }),
     cancel: vi.fn().mockResolvedValue(undefined),
     resume: vi.fn().mockResolvedValue({ id: 2, pipelineId: 1, status: 'succeeded' }),
+    list: vi.fn().mockResolvedValue([]),
+    snapshot: vi.fn().mockResolvedValue({ id: 1, pipelineId: 1, status: 'succeeded', pipelineSnapshot: {}, contextSnapshot: {} }),
     onEvent: vi.fn().mockReturnValue(() => undefined),
+  };
+}
+
+function createSettingsApiMock() {
+  return {
+    getRetention: vi.fn().mockResolvedValue({ maxDays: 30, maxCount: 100 }),
+    updateRetention: vi.fn().mockResolvedValue({ maxDays: 30, maxCount: 100 }),
   };
 }

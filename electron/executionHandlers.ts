@@ -23,6 +23,7 @@ export function registerExecutionHandlers() {
     new RemoteShellExecutor(servers, sshPool),
     new SftpTransferExecutor(servers, sshPool),
   );
+  engine.cleanupAllRunRetention();
 
   ipcMain.handle('runs:start', (event, pipelineId: number, parameters?: Record<string, unknown>) =>
     engine.runPipeline(pipelineId, parameters ?? {}, (payload) => {
@@ -34,5 +35,11 @@ export function registerExecutionHandlers() {
     engine.resumeRun(runId, (payload) => {
       event.sender.send('runs:event', payload);
     }),
+  );
+  ipcMain.handle('runs:list', (_event, pipelineId: number) => engine.listRuns(pipelineId));
+  ipcMain.handle('runs:snapshot', (_event, runId: number) => engine.getRunSnapshot(runId));
+  ipcMain.handle('settings:retention:get', () => engine.getRetentionSettings());
+  ipcMain.handle('settings:retention:update', (_event, settings: { maxDays: number; maxCount: number }) =>
+    engine.updateRetentionSettings(settings),
   );
 }
