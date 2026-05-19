@@ -25,7 +25,7 @@ import { CommandPanel } from './CommandPanel';
 
 type UnitNode = Node<{ label: string }>;
 type UnitEdge = Edge;
-type CommandOutput = { status: CommandExecutionStatus; stdout: string; stderr: string };
+type CommandOutput = { status: CommandExecutionStatus; stdout: string; stderr: string; progress?: { transferredBytes: number; totalBytes: number; percent: number } };
 
 export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
   const api = window.autoPipeline?.pipelines;
@@ -178,6 +178,19 @@ export function DagEditor({ pipeline }: { pipeline: PipelineRecord }) {
       const previous = current[event.commandId] ?? { status: 'pending', stdout: '', stderr: '' };
       if (event.type === 'command-status') {
         return { ...current, [event.commandId]: { ...previous, status: event.status } };
+      }
+      if (event.type === 'transfer-progress') {
+        return {
+          ...current,
+          [event.commandId]: {
+            ...previous,
+            progress: {
+              transferredBytes: event.transferredBytes,
+              totalBytes: event.totalBytes,
+              percent: event.percent,
+            },
+          },
+        };
       }
       return {
         ...current,
@@ -374,10 +387,22 @@ function RunViewer({
             <summary className="cursor-pointer px-3 py-2 text-sm text-slate-200">
               {commandId} · {output.status}
             </summary>
-            <pre className="whitespace-pre-wrap border-t border-border px-3 py-2 text-xs text-slate-200">
-              {output.stdout}
-              {output.stderr ? `\n[stderr]\n${output.stderr}` : ''}
-            </pre>
+            <div className="border-t border-border px-3 py-2">
+              {output.progress ? (
+                <div aria-label="Transfer progress" aria-valuemax={100} aria-valuemin={0} aria-valuenow={output.progress.percent} className="mb-2" role="progressbar">
+                  <div className="mb-1 h-2 overflow-hidden rounded-sm bg-slate-800">
+                    <div className="h-full bg-emerald-400 transition-[width]" style={{ width: `${output.progress.percent}%` }} />
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    transfer {output.progress.percent}% ({output.progress.transferredBytes}/{output.progress.totalBytes} bytes)
+                  </div>
+                </div>
+              ) : null}
+              <pre className="whitespace-pre-wrap text-xs text-slate-200">
+                {output.stdout}
+                {output.stderr ? `\n[stderr]\n${output.stderr}` : ''}
+              </pre>
+            </div>
           </details>
         ))}
       </div>

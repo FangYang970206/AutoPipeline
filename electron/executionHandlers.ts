@@ -3,6 +3,7 @@ import { CommandRepository } from '../src/main/command/commandRepository.js';
 import { LocalShellExecutor } from '../src/main/execution/localShellExecutor.js';
 import { PipelineEngine } from '../src/main/execution/pipelineEngine.js';
 import { RemoteShellExecutor } from '../src/main/execution/remoteShellExecutor.js';
+import { SftpTransferExecutor } from '../src/main/execution/sftpTransferExecutor.js';
 import { SshConnectionPool } from '../src/main/execution/sshConnectionPool.js';
 import { PipelineRepository } from '../src/main/pipeline/pipelineRepository.js';
 import { KeytarCredentialStore } from '../src/main/server/credentialStore.js';
@@ -20,6 +21,7 @@ export function registerExecutionHandlers() {
     new CommandRepository(db),
     new LocalShellExecutor(),
     new RemoteShellExecutor(servers, sshPool),
+    new SftpTransferExecutor(servers, sshPool),
   );
 
   ipcMain.handle('runs:start', (event, pipelineId: number, parameters?: Record<string, unknown>) =>

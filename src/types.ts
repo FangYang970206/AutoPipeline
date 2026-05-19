@@ -174,7 +174,8 @@ export interface RunRecord {
 export type ExecutionEvent =
   | { type: 'run-status'; runId: number; status: RunStatus }
   | { type: 'command-status'; runId: number; commandId: string; status: CommandExecutionStatus }
-  | { type: 'stdout' | 'stderr'; runId: number; commandId: string; data: string };
+  | { type: 'stdout' | 'stderr'; runId: number; commandId: string; data: string }
+  | { type: 'transfer-progress'; runId: number; commandId: string; transferredBytes: number; totalBytes: number; percent: number };
 
 declare global {
   interface Window {
