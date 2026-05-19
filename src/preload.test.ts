@@ -91,8 +91,18 @@ describe('preload contract', () => {
         onEvent: () => () => undefined,
       },
       settings: {
+        get: async () => ({
+          connectionPool: { idleTimeoutMinutes: 5, maxConnections: 10 },
+          notifications: { inApp: true, toast: false },
+          retention: { maxDays: 30, maxCount: 100 },
+          language: 'zh-CN',
+        }),
+        update: async (settings) => settings,
         getRetention: async () => ({ maxDays: 30, maxCount: 100 }),
         updateRetention: async (settings) => settings,
+      },
+      notifications: {
+        onRunCompleted: () => () => undefined,
       },
     } satisfies AutoPipelineApi;
 

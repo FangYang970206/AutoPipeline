@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App } from './App';
+import { App, SettingsPanel } from './App';
 import i18n from './i18n';
 import { useAppStore } from './store/appStore';
 import type { ExecutionEvent } from './types';
@@ -90,6 +90,7 @@ describe('App shell', () => {
       commands: createCommandApiMock(),
       runs: createRunsApiMock(),
       settings: createSettingsApiMock(),
+      notifications: createNotificationApiMock(),
     };
 
     render(<App />);
@@ -169,6 +170,7 @@ describe('App shell', () => {
       commands: createCommandApiMock(),
       runs: createRunsApiMock(),
       settings: createSettingsApiMock(),
+      notifications: createNotificationApiMock(),
     };
 
     render(<App />);
@@ -244,6 +246,7 @@ describe('App shell', () => {
         }),
       },
       settings: createSettingsApiMock(),
+      notifications: createNotificationApiMock(),
     };
 
     render(<App />);
@@ -321,6 +324,7 @@ describe('App shell', () => {
         }),
       },
       settings: createSettingsApiMock(),
+      notifications: createNotificationApiMock(),
     };
     vi.spyOn(window, 'prompt').mockReturnValue('prod');
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -341,6 +345,70 @@ describe('App shell', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Re-run' }));
     await waitFor(() => expect(window.prompt).toHaveBeenLastCalledWith('env', 'prod'));
     expect(window.confirm).toHaveBeenLastCalledWith('confirmDeploy? Previous: true');
+  });
+
+  it('renders run completion notifications with a status icon', async () => {
+    const completedListeners: Array<(notification: { runId: number; pipelineId: number; pipelineName: string; status: 'succeeded' }) => void> = [];
+    window.autoPipeline = {
+      app: {
+        getVersion: async () => '0.1.0',
+        ping: async () => 'pong',
+      },
+      servers: createServerApiMock(),
+      pipelines: createPipelineApiMock(),
+      commands: createCommandApiMock(),
+      runs: createRunsApiMock(),
+      settings: createSettingsApiMock(),
+      notifications: {
+        onRunCompleted: vi.fn().mockImplementation((callback) => {
+          completedListeners.push(callback);
+          return () => undefined;
+        }),
+      },
+    };
+
+    render(<App />);
+    act(() => {
+      completedListeners[0]({ runId: 9, pipelineId: 2, pipelineName: 'Deploy API', status: 'succeeded' });
+    });
+    expect(await screen.findByText('Deploy API succeeded')).toBeInTheDocument();
+    expect(screen.getByLabelText('Last run succeeded')).toBeInTheDocument();
+  });
+
+  it('saves all settings sections', async () => {
+    const update = vi.fn().mockImplementation(async (settings) => settings);
+    window.autoPipeline = {
+      app: {
+        getVersion: async () => '0.1.0',
+        ping: async () => 'pong',
+      },
+      servers: createServerApiMock(),
+      pipelines: createPipelineApiMock(),
+      commands: createCommandApiMock(),
+      runs: createRunsApiMock(),
+      settings: {
+        ...createSettingsApiMock(),
+        update,
+      },
+      notifications: createNotificationApiMock(),
+    };
+
+    const { container } = render(<SettingsPanel />);
+    fireEvent.change(container.querySelector('#settings-idle-timeout')!, { target: { value: '7' } });
+    expect(screen.getByText('7 min')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Windows toast'));
+    fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'en' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connectionPool: expect.objectContaining({ idleTimeoutMinutes: 7 }),
+          notifications: expect.objectContaining({ toast: true }),
+          language: 'en',
+        }),
+      ),
+    );
   });
 });
 
@@ -412,7 +480,20 @@ function createRunsApiMock() {
 
 function createSettingsApiMock() {
   return {
+    get: vi.fn().mockResolvedValue({
+      connectionPool: { idleTimeoutMinutes: 5, maxConnections: 10 },
+      notifications: { inApp: true, toast: false },
+      retention: { maxDays: 30, maxCount: 100 },
+      language: 'zh-CN',
+    }),
+    update: vi.fn().mockImplementation(async (settings) => settings),
     getRetention: vi.fn().mockResolvedValue({ maxDays: 30, maxCount: 100 }),
     updateRetention: vi.fn().mockResolvedValue({ maxDays: 30, maxCount: 100 }),
+  };
+}
+
+function createNotificationApiMock() {
+  return {
+    onRunCompleted: vi.fn().mockReturnValue(() => undefined),
   };
 }
