@@ -51,7 +51,11 @@ describe('RemoteShellExecutor', () => {
     ]);
     const events: Array<{ type: 'stdout' | 'stderr'; data: string }> = [];
 
-    const result = await executor.execute(commands.listCommands('unit-a')[0], (event) => events.push(event));
+    const result = await executor.execute(commands.listCommands('unit-a')[0], (event) => {
+      if (event.type === 'stdout' || event.type === 'stderr') {
+        events.push(event);
+      }
+    });
 
     expect(result.exitCode).toBe(0);
     expect(receivedScript).toBe('echo remote');
