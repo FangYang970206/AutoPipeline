@@ -37,8 +37,19 @@ export interface AutoPipelineApi {
     start: (pipelineId: number, parameters?: Record<string, unknown>) => Promise<RunRecord>;
     cancel: (runId: number) => Promise<void>;
     resume: (runId: number) => Promise<RunRecord>;
+    list: (pipelineId: number) => Promise<RunRecord[]>;
+    snapshot: (runId: number) => Promise<RunSnapshotRecord>;
     onEvent: (callback: (event: ExecutionEvent) => void) => () => void;
   };
+  settings: {
+    getRetention: () => Promise<RunRetentionSettings>;
+    updateRetention: (settings: RunRetentionSettings) => Promise<RunRetentionSettings>;
+  };
+}
+
+export interface RunRetentionSettings {
+  maxDays: number;
+  maxCount: number;
 }
 
 export type ServerAuthMethod = 'password' | 'key';
@@ -172,6 +183,17 @@ export interface RunRecord {
   pipelineId: number;
   status: RunStatus;
   parameters?: Record<string, unknown>;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+}
+
+export interface RunSnapshotRecord {
+  id: number;
+  pipelineId: number;
+  status: RunStatus;
+  pipelineSnapshot: unknown;
+  contextSnapshot: unknown;
 }
 
 export type ExecutionEvent =

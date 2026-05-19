@@ -86,7 +86,13 @@ describe('preload contract', () => {
         start: async () => ({ id: 1, pipelineId: 1, status: 'succeeded' }),
         cancel: async () => undefined,
         resume: async () => ({ id: 2, pipelineId: 1, status: 'succeeded' }),
+        list: async () => [],
+        snapshot: async () => ({ id: 1, pipelineId: 1, status: 'succeeded', pipelineSnapshot: {}, contextSnapshot: {} }),
         onEvent: () => () => undefined,
+      },
+      settings: {
+        getRetention: async () => ({ maxDays: 30, maxCount: 100 }),
+        updateRetention: async (settings) => settings,
       },
     } satisfies AutoPipelineApi;
 

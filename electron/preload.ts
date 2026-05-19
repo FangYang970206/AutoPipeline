@@ -37,7 +37,13 @@ interface AutoPipelineApi {
     start: (pipelineId: number, parameters?: unknown) => Promise<unknown>;
     cancel: (runId: number) => Promise<void>;
     resume: (runId: number) => Promise<unknown>;
+    list: (pipelineId: number) => Promise<unknown>;
+    snapshot: (runId: number) => Promise<unknown>;
     onEvent: (callback: (event: unknown) => void) => () => void;
+  };
+  settings: {
+    getRetention: () => Promise<unknown>;
+    updateRetention: (settings: unknown) => Promise<unknown>;
   };
 }
 
@@ -78,11 +84,17 @@ const api: AutoPipelineApi = {
     start: (pipelineId, parameters) => ipcRenderer.invoke('runs:start', pipelineId, parameters),
     cancel: (runId) => ipcRenderer.invoke('runs:cancel', runId) as Promise<void>,
     resume: (runId) => ipcRenderer.invoke('runs:resume', runId),
+    list: (pipelineId) => ipcRenderer.invoke('runs:list', pipelineId),
+    snapshot: (runId) => ipcRenderer.invoke('runs:snapshot', runId),
     onEvent: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
       ipcRenderer.on('runs:event', listener);
       return () => ipcRenderer.removeListener('runs:event', listener);
     },
+  },
+  settings: {
+    getRetention: () => ipcRenderer.invoke('settings:retention:get'),
+    updateRetention: (settings) => ipcRenderer.invoke('settings:retention:update', settings),
   },
 };
 
