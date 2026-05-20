@@ -116,6 +116,19 @@ describe('preload contract', () => {
       notifications: {
         onRunCompleted: () => () => undefined,
       },
+      fileBrowser: {
+        listLocal: async () => [],
+        createLocalDirectory: async () => undefined,
+        deleteLocal: async () => undefined,
+        renameLocal: async () => undefined,
+        listRemote: async () => [],
+        createRemoteDirectory: async () => undefined,
+        deleteRemote: async () => undefined,
+        renameRemote: async () => undefined,
+        upload: async () => undefined,
+        download: async () => undefined,
+        onTransferProgress: () => () => undefined,
+      },
     } satisfies AutoPipelineApi;
 
     await expect(api.app.ping()).resolves.toBe('pong');
