@@ -1,29 +1,19 @@
 import { BrowserWindow, Notification, ipcMain, type IpcMainInvokeEvent } from 'electron';
-import { CommandRepository } from '../src/main/command/commandRepository.js';
 import { LocalShellExecutor } from '../src/main/execution/localShellExecutor.js';
 import { PipelineEngine } from '../src/main/execution/pipelineEngine.js';
 import { RemoteShellExecutor } from '../src/main/execution/remoteShellExecutor.js';
 import { SftpTransferExecutor } from '../src/main/execution/sftpTransferExecutor.js';
-import { SshConnectionPool } from '../src/main/execution/sshConnectionPool.js';
 import { RunNotificationService } from '../src/main/notifications/runNotifications.js';
-import { PipelineRepository } from '../src/main/pipeline/pipelineRepository.js';
-import { KeytarCredentialStore } from '../src/main/server/credentialStore.js';
-import { ServerRepository } from '../src/main/server/serverRepository.js';
-import { AppSettingsRepository, type AppSettings } from '../src/main/settings/appSettings.js';
+import type { AppSettings } from '../src/main/settings/appSettings.js';
 import { getDatabase } from './database.js';
+import { getRuntimeServices, toPoolOptions } from './runtimeServices.js';
 
 export function registerExecutionHandlers() {
-  const db = getDatabase();
-  const credentials = new KeytarCredentialStore();
-  const servers = new ServerRepository(db, credentials, { findPipelineNamesUsingServer: () => [] });
-  const settings = new AppSettingsRepository(db);
-  const initialSettings = settings.getAll();
-  const sshPool = new SshConnectionPool(credentials, toPoolOptions(initialSettings));
-  const pipelines = new PipelineRepository(db);
+  const { db, commands, pipelines, servers, settings, sshPool } = getRuntimeServices();
   const engine = new PipelineEngine(
     db,
     pipelines,
-    new CommandRepository(db),
+    commands,
     new LocalShellExecutor(),
     new RemoteShellExecutor(servers, sshPool),
     new SftpTransferExecutor(servers, sshPool),
@@ -77,13 +67,6 @@ export function registerExecutionHandlers() {
     engine.cleanupAllRunRetention();
     return saved.retention;
   });
-}
-
-function toPoolOptions(settings: AppSettings) {
-  return {
-    idleTimeoutMs: settings.connectionPool.idleTimeoutMinutes * 60 * 1000,
-    maxConnections: settings.connectionPool.maxConnections,
-  };
 }
 
 function getPipelineName(db: ReturnType<typeof getDatabase>, pipelineId: number) {
