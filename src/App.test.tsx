@@ -91,6 +91,7 @@ describe('App shell', () => {
       runs: createRunsApiMock(),
       settings: createSettingsApiMock(),
       notifications: createNotificationApiMock(),
+      fileBrowser: createFileBrowserApiMock(),
     };
 
     render(<App />);
@@ -171,6 +172,7 @@ describe('App shell', () => {
       runs: createRunsApiMock(),
       settings: createSettingsApiMock(),
       notifications: createNotificationApiMock(),
+      fileBrowser: createFileBrowserApiMock(),
     };
 
     render(<App />);
@@ -243,6 +245,7 @@ describe('App shell', () => {
       runs: createRunsApiMock(),
       settings: createSettingsApiMock(),
       notifications: createNotificationApiMock(),
+      fileBrowser: createFileBrowserApiMock(),
     };
     render(<App />);
 
@@ -322,6 +325,7 @@ describe('App shell', () => {
       },
       settings: createSettingsApiMock(),
       notifications: createNotificationApiMock(),
+      fileBrowser: createFileBrowserApiMock(),
     };
 
     render(<App />);
@@ -400,6 +404,7 @@ describe('App shell', () => {
       },
       settings: createSettingsApiMock(),
       notifications: createNotificationApiMock(),
+      fileBrowser: createFileBrowserApiMock(),
     };
     vi.spyOn(window, 'prompt').mockReturnValue('prod');
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -440,6 +445,7 @@ describe('App shell', () => {
           return () => undefined;
         }),
       },
+      fileBrowser: createFileBrowserApiMock(),
     };
 
     render(<App />);
@@ -448,6 +454,73 @@ describe('App shell', () => {
     });
     expect(await screen.findByText('Deploy API succeeded')).toBeInTheDocument();
     expect(screen.getByLabelText('Last run succeeded')).toBeInTheDocument();
+  });
+
+  it('browses local and remote files and transfers selected files', async () => {
+    useAppStore.setState({ activeView: 'fileBrowser' });
+    const listLocal = vi.fn().mockResolvedValue([
+      { name: 'dist', path: 'C:\\workspace\\dist', type: 'directory', size: 0, modifiedAt: '2026-05-18T00:00:00Z' },
+      { name: 'bundle.zip', path: 'C:\\workspace\\bundle.zip', type: 'file', size: 4096, modifiedAt: '2026-05-18T00:00:00Z' },
+    ]);
+    const listRemote = vi.fn().mockResolvedValue([
+      { name: 'releases', path: '/var/www/releases', type: 'directory', size: 0, modifiedAt: '2026-05-18T00:00:00Z' },
+      { name: 'app.log', path: '/var/www/app.log', type: 'file', size: 2048, modifiedAt: '2026-05-18T00:00:00Z' },
+    ]);
+    const upload = vi.fn().mockResolvedValue(undefined);
+    const download = vi.fn().mockResolvedValue(undefined);
+    window.autoPipeline = {
+      app: {
+        getVersion: async () => '0.1.0',
+        ping: async () => 'pong',
+      },
+      servers: {
+        ...createServerApiMock(),
+        list: vi.fn().mockResolvedValue([
+          {
+            id: 1,
+            displayName: 'Production',
+            host: 'prod.example.com',
+            port: 22,
+            username: 'deploy',
+            authMethod: 'password',
+            keyPath: null,
+            connectionTimeout: 30,
+            keepaliveInterval: 15,
+            defaultDirectory: '/var/www',
+            notes: '',
+            createdAt: '2026-05-18T00:00:00Z',
+            updatedAt: '2026-05-18T00:00:00Z',
+          },
+        ]),
+      },
+      pipelines: createPipelineApiMock(),
+      commands: createCommandApiMock(),
+      runs: createRunsApiMock(),
+      settings: createSettingsApiMock(),
+      notifications: createNotificationApiMock(),
+      fileBrowser: {
+        ...createFileBrowserApiMock(),
+        listLocal,
+        listRemote,
+        upload,
+        download,
+      },
+    };
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: '文件浏览器' })).toBeInTheDocument();
+    expect(await screen.findByText('bundle.zip')).toBeInTheDocument();
+    expect(await screen.findByText('app.log')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByText('[dir] dist'), { key: 'Enter' });
+    await waitFor(() => expect(listLocal).toHaveBeenCalledWith('C:\\workspace\\dist'));
+    fireEvent.click(screen.getByText('bundle.zip'));
+    fireEvent.click(screen.getByText('app.log'));
+    fireEvent.click(screen.getByRole('button', { name: 'Upload' }));
+    await waitFor(() => expect(upload).toHaveBeenCalledWith(1, 'C:\\workspace\\bundle.zip', '/var/www'));
+    fireEvent.click(await screen.findByText('app.log'));
+    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+    await waitFor(() => expect(download).toHaveBeenCalledWith(1, '/var/www/app.log', 'C:\\workspace\\dist'));
   });
 
   it('saves all settings sections', async () => {
@@ -466,6 +539,7 @@ describe('App shell', () => {
         update,
       },
       notifications: createNotificationApiMock(),
+      fileBrowser: createFileBrowserApiMock(),
     };
 
     const { container } = render(<SettingsPanel />);
@@ -573,5 +647,21 @@ function createSettingsApiMock() {
 function createNotificationApiMock() {
   return {
     onRunCompleted: vi.fn().mockReturnValue(() => undefined),
+  };
+}
+
+function createFileBrowserApiMock() {
+  return {
+    listLocal: vi.fn().mockResolvedValue([]),
+    createLocalDirectory: vi.fn().mockResolvedValue(undefined),
+    deleteLocal: vi.fn().mockResolvedValue(undefined),
+    renameLocal: vi.fn().mockResolvedValue(undefined),
+    listRemote: vi.fn().mockResolvedValue([]),
+    createRemoteDirectory: vi.fn().mockResolvedValue(undefined),
+    deleteRemote: vi.fn().mockResolvedValue(undefined),
+    renameRemote: vi.fn().mockResolvedValue(undefined),
+    upload: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue(undefined),
+    onTransferProgress: vi.fn().mockReturnValue(() => undefined),
   };
 }

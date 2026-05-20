@@ -53,6 +53,19 @@ interface AutoPipelineApi {
   notifications: {
     onRunCompleted: (callback: (notification: unknown) => void) => () => void;
   };
+  fileBrowser: {
+    listLocal: (path: string) => Promise<unknown>;
+    createLocalDirectory: (parentPath: string, name: string) => Promise<void>;
+    deleteLocal: (path: string) => Promise<void>;
+    renameLocal: (path: string, newName: string) => Promise<void>;
+    listRemote: (serverId: number, path: string) => Promise<unknown>;
+    createRemoteDirectory: (serverId: number, parentPath: string, name: string) => Promise<void>;
+    deleteRemote: (serverId: number, path: string) => Promise<void>;
+    renameRemote: (serverId: number, path: string, newName: string) => Promise<void>;
+    upload: (serverId: number, localPath: string, remoteDirectory: string) => Promise<void>;
+    download: (serverId: number, remotePath: string, localDirectory: string) => Promise<void>;
+    onTransferProgress: (callback: (progress: unknown) => void) => () => void;
+  };
 }
 
 const api: AutoPipelineApi = {
@@ -114,6 +127,23 @@ const api: AutoPipelineApi = {
       const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
       ipcRenderer.on('notifications:run-completed', listener);
       return () => ipcRenderer.removeListener('notifications:run-completed', listener);
+    },
+  },
+  fileBrowser: {
+    listLocal: (path) => ipcRenderer.invoke('file-browser:local:list', path),
+    createLocalDirectory: (parentPath, name) => ipcRenderer.invoke('file-browser:local:mkdir', parentPath, name) as Promise<void>,
+    deleteLocal: (path) => ipcRenderer.invoke('file-browser:local:delete', path) as Promise<void>,
+    renameLocal: (path, newName) => ipcRenderer.invoke('file-browser:local:rename', path, newName) as Promise<void>,
+    listRemote: (serverId, path) => ipcRenderer.invoke('file-browser:remote:list', serverId, path),
+    createRemoteDirectory: (serverId, parentPath, name) => ipcRenderer.invoke('file-browser:remote:mkdir', serverId, parentPath, name) as Promise<void>,
+    deleteRemote: (serverId, path) => ipcRenderer.invoke('file-browser:remote:delete', serverId, path) as Promise<void>,
+    renameRemote: (serverId, path, newName) => ipcRenderer.invoke('file-browser:remote:rename', serverId, path, newName) as Promise<void>,
+    upload: (serverId, localPath, remoteDirectory) => ipcRenderer.invoke('file-browser:upload', serverId, localPath, remoteDirectory) as Promise<void>,
+    download: (serverId, remotePath, localDirectory) => ipcRenderer.invoke('file-browser:download', serverId, remotePath, localDirectory) as Promise<void>,
+    onTransferProgress: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+      ipcRenderer.on('file-browser:transfer-progress', listener);
+      return () => ipcRenderer.removeListener('file-browser:transfer-progress', listener);
     },
   },
 };

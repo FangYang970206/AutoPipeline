@@ -53,6 +53,33 @@ export interface AutoPipelineApi {
   notifications: {
     onRunCompleted: (callback: (notification: RunCompletionNotification) => void) => () => void;
   };
+  fileBrowser: {
+    listLocal: (path: string) => Promise<FileBrowserEntry[]>;
+    createLocalDirectory: (parentPath: string, name: string) => Promise<void>;
+    deleteLocal: (path: string) => Promise<void>;
+    renameLocal: (path: string, newName: string) => Promise<void>;
+    listRemote: (serverId: number, path: string) => Promise<FileBrowserEntry[]>;
+    createRemoteDirectory: (serverId: number, parentPath: string, name: string) => Promise<void>;
+    deleteRemote: (serverId: number, path: string) => Promise<void>;
+    renameRemote: (serverId: number, path: string, newName: string) => Promise<void>;
+    upload: (serverId: number, localPath: string, remoteDirectory: string) => Promise<void>;
+    download: (serverId: number, remotePath: string, localDirectory: string) => Promise<void>;
+    onTransferProgress: (callback: (progress: FileTransferProgress & { direction: 'upload' | 'download' }) => void) => () => void;
+  };
+}
+
+export interface FileBrowserEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size: number;
+  modifiedAt: string;
+}
+
+export interface FileTransferProgress {
+  transferredBytes: number;
+  totalBytes: number;
+  percent: number;
 }
 
 export interface RunRetentionSettings {

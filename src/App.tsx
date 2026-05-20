@@ -5,6 +5,7 @@ import { Button } from './components/ui/button';
 import { useAppStore } from './store/appStore';
 import type { AppSettings, RunCompletionNotification, ViewId } from './types';
 import { PipelineManagement } from './views/PipelineManagement';
+import { FileBrowser } from './views/FileBrowser';
 import { ServerManagement } from './views/ServerManagement';
 
 const navItems: Array<{
@@ -89,25 +90,14 @@ export function App() {
           ) : null}
           {activeView === 'pipelines' ? (
             <PipelineManagement />
+          ) : activeView === 'fileBrowser' ? (
+            <FileBrowser />
           ) : activeView === 'servers' ? (
             <ServerManagement />
           ) : activeView === 'settings' ? (
             <SettingsPanel />
           ) : (
-            <>
-              <div className="max-w-3xl">
-                <h2 className="text-2xl font-semibold">{t(`views.${activeView}`)}</h2>
-                <p className="mt-2 text-sm text-slate-300">{t(`descriptions.${activeView}`)}</p>
-              </div>
-              <div className="grid max-w-3xl grid-cols-1 gap-3 md:grid-cols-2">
-                <div className="rounded-md border border-border bg-slate-900 p-4">
-                  <p className="text-sm text-slate-300">{t(`descriptions.${activeView}`)}</p>
-                </div>
-                <div className="rounded-md border border-border bg-slate-900 p-4">
-                  <p className="text-sm text-slate-300">IPC: {window.autoPipeline ? 'ready' : 'renderer'}</p>
-                </div>
-              </div>
-            </>
+            null
           )}
         </section>
       </main>
